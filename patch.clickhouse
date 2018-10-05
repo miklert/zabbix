@@ -1,0 +1,1397 @@
+diff -rNu clickhouse.orig/frontends/php/include/classes/api/managers/CHistoryManager.php clickhouse.new/frontends/php/include/classes/api/managers/CHistoryManager.php
+--- clickhouse.orig/frontends/php/include/classes/api/managers/CHistoryManager.php	2018-10-05 07:00:53.250639725 +0500
++++ clickhouse.new/frontends/php/include/classes/api/managers/CHistoryManager.php	2018-10-04 14:48:06.883000000 +0500
+@@ -34,10 +34,15 @@
+ 	 * @return array    an array with items IDs as keys and arrays of history objects as values
+ 	 */
+ 	public function getLastValues(array $items, $limit = 1, $period = null) {
++
+ 		$results = [];
+ 		$grouped_items = self::getItemsGroupedByStorage($items);
+ 
+-		if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
++		if (array_key_exists(ZBX_HISTORY_SOURCE_CLICKHOUSE, $grouped_items)) {
++			$results += $this->getLastValuesFromClickHouse($grouped_items[ZBX_HISTORY_SOURCE_CLICKHOUSE], $limit,
++					$period
++			);
++		} else if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
+ 			$results += $this->getLastValuesFromElasticsearch($grouped_items[ZBX_HISTORY_SOURCE_ELASTIC], $limit,
+ 					$period
+ 			);
+@@ -55,6 +60,57 @@
+ 	 *
+ 	 * @see CHistoryManager::getLastValues
+ 	 */
++
++	/**
++	 * Clickhouse implementation of getLastValues.
++	 *
++	 */
++
++	private function getLastValuesFromClickhouse($items, $limit, $period) {
++
++		global $HISTORY;
++		$results = [];
++
++		foreach ($items as $item) {
++			if ($item['value_type'] ==  ITEM_VALUE_TYPE_FLOAT) {
++				$query_text=	'SELECT itemid, toInt32(clock),ns,value_dbl'.
++					' FROM '.$HISTORY['tablename'].' h'.
++					' WHERE h.itemid= '.$item['itemid'].
++					($period ? ' AND h.clock>'.(time() - $period) : '').
++					' ORDER BY h.clock DESC';
++		    }
++
++			if ($item['value_type'] ==  ITEM_VALUE_TYPE_UINT64) {
++				$query_text=	'SELECT itemid, toInt32(clock) as clock,ns,value'.
++					' FROM '.$HISTORY['tablename'].' h'.
++					' WHERE h.itemid= '.$item['itemid']. 
++					($period ? ' AND h.clock>'.(time() - $period) : '').
++					' ORDER BY h.clock DESC';
++		    }
++
++			if ($item['value_type'] ==  ITEM_VALUE_TYPE_STR || $item['value_type'] ==  ITEM_VALUE_TYPE_TEXT ) {
++				$query_text=	'SELECT itemid, toInt32(clock) as clock,ns,value_str'.
++					' FROM '.$HISTORY['tablename'].' h'.
++					' WHERE h.itemid= '.$item['itemid']. 
++					($period ? ' AND h.clock>'.(time() - $period) : '').
++					' ORDER BY h.clock DESC';
++		    }
++
++			if ($limit > 0) $query_text.=" LIMIT $limit";
++			
++			$values = CClickHouseHelper::query($query_text,1,array('itemid','clock','ns','value'));
++
++			if ($values) {
++
++				$results[$item['itemid']] = $values;
++			} else {
++//			    error("Got empty array, ommiting the result");
++			}
++		}
++
++		return $results;
++	}
++
+ 	private function getLastValuesFromElasticsearch($items, $limit, $period) {
+ 		$terms = [];
+ 		$results = [];
+@@ -137,6 +193,7 @@
+ 	 *
+ 	 * @see CHistoryManager::getLastValues
+ 	 */
++
+ 	private function getLastValuesFromSql($items, $limit, $period) {
+ 		$results = [];
+ 
+@@ -171,6 +228,7 @@
+ 	 * @return array    history value aggregation for graphs
+ 	 */
+ 	public function getGraphAggregation(array $items, $time_from, $time_to, $width = null) {
++//		error("Hello wold");
+ 		if ($width !== null) {
+ 			$size = $time_to - $time_from;
+ 			$delta = $size - $time_from % $size;
+@@ -183,7 +241,13 @@
+ 		$grouped_items = self::getItemsGroupedByStorage($items);
+ 
+ 		$results = [];
+-		if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
++
++
++		if (array_key_exists(ZBX_HISTORY_SOURCE_CLICKHOUSE, $grouped_items)) {
++			$results += $this->getGraphAggregationFromClickhouse($grouped_items[ZBX_HISTORY_SOURCE_CLICKHOUSE],
++					$time_from, $time_to, $width, $size, $delta
++			);
++		} else if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
+ 			$results += $this->getGraphAggregationFromElasticsearch($grouped_items[ZBX_HISTORY_SOURCE_ELASTIC],
+ 					$time_from, $time_to, $width, $size, $delta
+ 			);
+@@ -203,6 +267,57 @@
+ 	 *
+ 	 * @see CHistoryManager::getGraphAggregation
+ 	 */
++	private function getGraphAggregationFromClickhouse(array $items, $time_from, $time_to, $width, $size, $delta) {
++
++		global $HISTORY;
++		$group_by = 'itemid';
++		$sql_select_extra = '';
++
++		if ($width !== null && $size !== null && $delta !== null) {
++			// Required for 'group by' support of Oracle.
++			$calc_field = 'round('.$width.'*'.'modulo(toUInt32(clock)'.'+'.$delta.",$size)".'/('.$size.'),0)';
++
++			$sql_select_extra = ','.$calc_field.' AS i';
++			$group_by .= ','.$calc_field;
++		}
++
++		$results = [];
++
++		foreach ($items as $item) {
++			if ($item['value_type'] == ITEM_VALUE_TYPE_UINT64) {
++				$sql_select = 'COUNT(*) AS count,AVG(value) AS avg,MIN(value) AS min,MAX(value) AS max';
++			} else
++			{
++				$sql_select = 'COUNT(*) AS count,AVG(value_dbl) AS avg,MIN(value_dbl) AS min,MAX(value_dbl) AS max';
++			}
++
++			$query_text = 
++				'SELECT itemid,'.$sql_select.$sql_select_extra.',MAX(toUInt32(clock)) AS clock1'.
++				' FROM '. $HISTORY['tablename'] .
++				' WHERE itemid='.$item['itemid'].
++					' AND toUInt32(clock)>='.$time_from.
++					' AND toUInt32(clock)<='.$time_to.
++				' GROUP BY '.$group_by ;
++			
++//			file_put_contents('/var/log/nginx/chartlog.log', "Will do query '$query_text' \n",FILE_APPEND);
++
++			$values = CClickHouseHelper::query($query_text,1,array('itemid','count','avg','min','max','i','clock'));
++
++			$results[$item['itemid']]['source'] = 'history';
++			$results[$item['itemid']]['data'] = $values;
++		}
++
++//	    ob_start();
++//	    var_dump($results);
++//	    $dresult = ob_get_clean();
++//	    error("Dump of the result is '$dresult'");
++
++//	    file_put_contents('/var/log/nginx/chartlog.log', "Clickhouse Results structure is $dresult' \n",FILE_APPEND);
++
++		return $results;
++
++	}
++
+ 	private function getGraphAggregationFromElasticsearch(array $items, $time_from, $time_to, $width, $size, $delta) {
+ 		$terms = [];
+ 
+@@ -423,6 +538,8 @@
+ 	 */
+ 	public function getAggregatedValue(array $item, $aggregation, $time_from) {
+ 		switch (self::getDataSourceType($item['value_type'])) {
++			case ZBX_HISTORY_SOURCE_CLICKHOUSE:
++				return $this->getAggregatedValueFromClickhouse($item, $aggregation, $time_from);
+ 			case ZBX_HISTORY_SOURCE_ELASTIC:
+ 				return $this->getAggregatedValueFromElasticsearch($item, $aggregation, $time_from);
+ 
+@@ -431,6 +548,24 @@
+ 		}
+ 	}
+ 
++	private function getAggregatedValueFromClickhouse(array $item, $aggregation, $time_from) {
++
++		global $HISTORY;
++		$query_text =
++			'SELECT '.$aggregation.'(value) AS value'.
++			' FROM '. $HISTORY['tablename'].
++			' WHERE clock>toDateTime('.$time_from.')'.
++			' AND itemid='.$item['itemid'].
++			' HAVING COUNT(*)>0';
++		
++
++		$value = CClickHouseHelper::query($query_text,0,array());
++
++		return $value;
++
++	}
++
++
+ 	/**
+ 	 * Elasticsearch specific implementation of getAggregatedValue.
+ 	 *
+@@ -623,8 +758,12 @@
+ 			global $HISTORY;
+ 
+ 			if (is_array($HISTORY) && array_key_exists('types', $HISTORY) && is_array($HISTORY['types'])) {
+-				$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
+-						? ZBX_HISTORY_SOURCE_ELASTIC : ZBX_HISTORY_SOURCE_SQL;
++					if ($HISTORY['storagetype']=='clickhouse') 
++							$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
++								? ZBX_HISTORY_SOURCE_CLICKHOUSE : ZBX_HISTORY_SOURCE_SQL;
++					else 
++							$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
++								? ZBX_HISTORY_SOURCE_ELASTIC : ZBX_HISTORY_SOURCE_SQL;
+ 			}
+ 			else {
+ 				// SQL is a fallback data source.
+diff -rNu clickhouse.orig/frontends/php/include/classes/api/services/CHistory.php clickhouse.new/frontends/php/include/classes/api/services/CHistory.php
+--- clickhouse.orig/frontends/php/include/classes/api/services/CHistory.php	2018-10-05 07:00:53.262639423 +0500
++++ clickhouse.new/frontends/php/include/classes/api/services/CHistory.php	2018-10-04 14:52:07.684000000 +0500
+@@ -112,7 +112,10 @@
+ 		switch (CHistoryManager::getDataSourceType($options['history'])) {
+ 			case ZBX_HISTORY_SOURCE_ELASTIC:
+ 				return $this->getFromElasticsearch($options);
+-
++				break;
++			case ZBX_HISTORY_SOURCE_CLICKHOUSE:
++				return $this->getFromClickHouse($options);
++				break;
+ 			default:
+ 				return $this->getFromSql($options);
+ 		}
+@@ -239,6 +242,129 @@
+ 	}
+ 
+ 	/**
++	 * Clickhouse specific implementation of get.
++	 *
++	 * @see CHistory::get
++	 */
++	private function getFromClickHouse($options) {
++		global $HISTORY;
++		$result = [];
++		$sql_parts = [
++			'select'	=> ['history' => 'h.itemid'],
++			'from'		=> [],
++			'where'		=> [],
++			'group'		=> [],
++			'order'		=> [],
++			'limit'		=> null
++		];
++
++
++		$value_col='value';
++
++		if ($options['history']==ITEM_VALUE_TYPE_FLOAT) {
++		    $value_col='value_dbl';
++		}
++
++		if ($options['history']==ITEM_VALUE_TYPE_STR) {
++		    $value_col='value_str';
++		}
++
++
++		$table_name = $HISTORY['tablename'];
++
++		$sql_parts['from']['history'] = $table_name.' h';
++
++		// itemids
++		if ($options['itemids'] !== null) {
++			$sql_parts['where']['itemid'] = "h.itemid =". $options['itemids'][0];
++		}
++
++		// time_from
++		if ($options['time_from'] !== null) {
++			$sql_parts['where']['clock_from'] = 'h.clock>='.zbx_dbstr($options['time_from']);
++		}
++
++		// time_till
++		if ($options['time_till'] !== null) {
++			$sql_parts['where']['clock_till'] = 'h.clock<='.zbx_dbstr($options['time_till']);
++		}
++
++		// filter
++		if (is_array($options['filter'])) {
++			$this->dbFilter($sql_parts['from']['history'], $options, $sql_parts);
++		}
++
++		// search
++		if (is_array($options['search'])) {
++			zbx_db_search($sql_parts['from']['history'], $options, $sql_parts);
++		}
++
++		// output
++		if ($options['output'] == API_OUTPUT_EXTEND) {
++			unset($sql_parts['select']['clock']);
++			$sql_parts['select']['history'] = 'h.*';
++		}
++
++		// countOutput
++		if ($options['countOutput']) {
++			$options['sortfield'] = '';
++			$sql_parts['select'] = ['count(DISTINCT h.hostid) as rowscount'];
++
++			// groupCount
++			if ($options['groupCount']) {
++				foreach ($sql_parts['group'] as $key => $fields) {
++					$sql_parts['select'][$key] = $fields;
++				}
++			}
++		}
++
++		// sorting
++		$sql_parts = $this->applyQuerySortOptions($table_name, $this->tableAlias(), $options, $sql_parts);
++
++		// limit
++		if (zbx_ctype_digit($options['limit']) && $options['limit']) {
++			$sql_parts['limit'] = $options['limit'];
++		}
++
++		$sql_parts['select'] = array_unique($sql_parts['select']);
++		$sql_parts['from'] = array_unique($sql_parts['from']);
++		$sql_parts['where'] = array_unique($sql_parts['where']);
++		$sql_parts['order'] = array_unique($sql_parts['order']);
++
++		$sql_select = '';
++		$sql_from = '';
++		$sql_order = '';
++
++		if ($sql_parts['select']) {
++			$sql_select .= implode(',', $sql_parts['select']);
++		}
++
++		if ($sql_parts['from']) {
++			$sql_from .= implode(',', $sql_parts['from']);
++		}
++
++		$sql_where = $sql_parts['where'] ? ' WHERE '.implode(' AND ', $sql_parts['where']) : '';
++
++		if ($sql_parts['order']) {
++			$sql_order .= ' ORDER BY '.implode(',', $sql_parts['order']);
++		}
++
++		$sql_limit = $sql_parts['limit'];
++		$sql = "SELECT itemid, toInt32(clock), ns, $value_col".
++				' FROM '.$sql_from.
++				$sql_where.
++				$sql_order;
++
++		var_dump($sql);
++		$values = CClickHouseHelper::query($sql,1,array('itemid','clock','ns', 'value'));
++
++
++//		error("Will exec sql $sql");
++
++		return $values;
++	}
++
++	/**
+ 	 * Elasticsearch specific implementation of get.
+ 	 *
+ 	 * @see CHistory::get
+@@ -315,4 +441,5 @@
+ 
+ 		return null;
+ 	}
++
+ }
+diff -rNu clickhouse.orig/frontends/php/include/classes/helpers/CClickHouseHelper.php clickhouse.new/frontends/php/include/classes/helpers/CClickHouseHelper.php
+--- clickhouse.orig/frontends/php/include/classes/helpers/CClickHouseHelper.php	1970-01-01 05:00:00.000000000 +0500
++++ clickhouse.new/frontends/php/include/classes/helpers/CClickHouseHelper.php	2018-10-04 14:50:25.178436324 +0500
+@@ -0,0 +1,73 @@
++<?php
++
++/*
++ * A helper class for working with ClickHouse database
++ */
++class CClickHouseHelper {
++
++	/**
++	 * Perform request(s) to Elasticsearch and parse the results.
++	 *
++	 * @param string $method      HTTP method to be used to perform request
++	 * @param string $endpoint    requested url
++	 * @param mixed  $request     data to be sent
++	 *
++	 * @return array    parsed result
++	 */
++	public static function query($request,$is_table_result,$columns) {
++		
++		global $HISTORY;
++
++		$ch = curl_init();
++
++		curl_setopt($ch, CURLOPT_URL,$HISTORY['url']['uint']);
++		curl_setopt($ch, CURLOPT_POST, 1);
++		curl_setopt($ch, CURLOPT_POSTFIELDS,$request);
++
++		// receive server response ...
++		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
++
++		$server_output = curl_exec ($ch);
++		curl_close ($ch);
++
++		return self::parseResult($server_output,$is_table_result,$columns);
++		
++	}
++
++	/**
++	 * Parse result and return two dimentional array of the result
++	 *
++	 * @param string $data        result as a string
++	 *
++	 * @return array    parsed result  two dimentional array of the result
++	 */
++	private static function parseResult($data,$is_table_result,$columns) {
++
++	    //to make processing simpler, lets distinguish results of two types - table (two dimensional array as result
++	    //returned or SINGLE, when one value (a number, probably) 
++	    if ($is_table_result) 
++	    {
++			$result=[];
++
++			$lines = explode("\n", $data);
++			$curline=0;
++
++			foreach ($lines as $line) {
++		    	if (strlen(str_replace("\n",'',$line) ) > 0) 
++		    	{	 
++					$result[$curline]=array_combine($columns,explode("\t",$line));
++					$curline++;
++				} 
++			}
++	    } else
++	    {
++			//single result is here, stripping tabs,spaces and newlines
++			$result=str_replace(array("\r", "\n","\t"), '', $data);
++	    }
++
++	    return $result;
++	}
++}
++
++
++
+diff -rNu clickhouse.orig/src/libs/zbxhistory/history.c clickhouse.new/src/libs/zbxhistory/history.c
+--- clickhouse.orig/src/libs/zbxhistory/history.c	2018-10-05 07:00:53.526632784 +0500
++++ clickhouse.new/src/libs/zbxhistory/history.c	2018-09-10 12:53:07.018276152 +0500
+@@ -25,10 +25,11 @@
+ 
+ #include "../zbxalgo/vectorimpl.h"
+ 
+-ZBX_VECTOR_IMPL(history_record, zbx_history_record_t)
++ZBX_VECTOR_IMPL(history_record, zbx_history_record_t);
+ 
+ extern char	*CONFIG_HISTORY_STORAGE_URL;
+ extern char	*CONFIG_HISTORY_STORAGE_OPTS;
++extern char	*CONFIG_HISTORY_STORAGE_TYPE;
+ 
+ zbx_history_iface_t	history_ifaces[ITEM_VALUE_TYPE_MAX];
+ 
+@@ -53,10 +54,21 @@
+ 
+ 	for (i = 0; i < ITEM_VALUE_TYPE_MAX; i++)
+ 	{
+-		if (NULL == CONFIG_HISTORY_STORAGE_URL || NULL == strstr(CONFIG_HISTORY_STORAGE_OPTS, opts[i]))
++		if (NULL == CONFIG_HISTORY_STORAGE_URL || NULL == strstr(CONFIG_HISTORY_STORAGE_OPTS, opts[i])) 
++		{
++			zabbix_log(LOG_LEVEL_INFORMATION, "Init SQL storage engine as history storage for type %s", opts[i]);
+ 			ret = zbx_history_sql_init(&history_ifaces[i], i, error);
+-		else
++		}
++		else if ( NULL != strstr(CONFIG_HISTORY_STORAGE_TYPE,"clickhouse")) 
++		{
++			ret = zbx_history_clickhouse_init(&history_ifaces[i], i, error);
++			zabbix_log(LOG_LEVEL_INFORMATION, "Init Clickhouse storage engine as history storage for type %s", opts[i]);
++		}
++		else 
++		{
+ 			ret = zbx_history_elastic_init(&history_ifaces[i], i, error);
++			zabbix_log(LOG_LEVEL_INFORMATION, "Init ElasticsSearch storage engine as history storage for type %s", opts[i]);
++		}
+ 
+ 		if (FAIL == ret)
+ 			return FAIL;
+diff -rNu clickhouse.orig/src/libs/zbxhistory/history_clickhouse.c clickhouse.new/src/libs/zbxhistory/history_clickhouse.c
+--- clickhouse.orig/src/libs/zbxhistory/history_clickhouse.c	1970-01-01 05:00:00.000000000 +0500
++++ clickhouse.new/src/libs/zbxhistory/history_clickhouse.c	2018-09-30 07:17:11.731377705 +0500
+@@ -0,0 +1,802 @@
++/*
++** Zabbix
++** Copyright (C) 2001-2018 Zabbix SIA
++**
++** This program is free software; you can redistribute it and/or modify
++** it under the terms of the GNU General Public License as published by
++** the Free Software Foundation; either version 2 of the License, or
++** (at your option) any later version.
++**
++** This program is distributed in the hope that it will be useful,
++** but WITHOUT ANY WARRANTY; without even the implied warranty of
++** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++** GNU General Public License for more details.
++**
++** You should have received a copy of the GNU General Public License
++** along with this program; if not, write to the Free Software
++** Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++**/
++
++/* From Mikler: pretty much of this code is history_elastics.c
++** i've replaced structures and functions names to clickhouse
++** and sure i've changed processing of reads and writes and have cleaned some staff
++** as processing elastics output via json seems to be lot more difficult
++** it might be feasible to complete delete functions fully support zabbix
++** but deleting data from clickhouse by selecting records to delete 
++** is something better to avoid, so there is no reason to support them
++**/
++
++
++#include "common.h"
++#include "log.h"
++#include "zbxjson.h"
++#include "zbxalgo.h"
++#include "dbcache.h"
++#include "zbxhistory.h"
++#include "zbxself.h"
++#include "history.h"
++#include <stdio.h>
++#include <string.h>
++
++/* curl_multi_wait() is supported starting with version 7.28.0 (0x071c00) */
++#if defined(HAVE_LIBCURL) && LIBCURL_VERSION_NUM >= 0x071c00
++
++#define		ZBX_HISTORY_STORAGE_DOWN	10000 /* Timeout in milliseconds */
++#define		MAX_HISTORY_CLICKHOUSE_FIELDS	5 /* How many fields to parse from clickhouse output */
++
++//const char	*value_type_str[] = {"dbl", "str", "log", "uint", "text"};
++
++extern char	*CONFIG_HISTORY_STORAGE_URL;
++extern char 	*CONFIG_HISTORY_STORAGE_TABLE_NAME;
++typedef struct
++{
++	char	*base_url;
++//post_url  here from elastics where it was used for scrolling of data search results, 
++//post_url might be used to use some clickhouse options, so i've decided to leave it
++	char	*post_url;
++	char	*buf;
++	CURL	*handle;
++}
++zbx_clickhouse_data_t;
++
++typedef struct
++{
++	unsigned char		initialized;
++	zbx_vector_ptr_t	ifaces;
++
++	CURLM			*handle;
++}
++zbx_clickhouse_writer_t;
++
++static zbx_clickhouse_writer_t	writer;
++
++typedef struct
++{
++	char	*data;
++	size_t	alloc;
++	size_t	offset;
++}
++zbx_httppage_t;
++
++static zbx_httppage_t	page;
++
++static size_t	curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
++{
++	size_t	r_size = size * nmemb;
++
++	ZBX_UNUSED(userdata);
++
++	zbx_strncpy_alloc(&page.data, &page.alloc, &page.offset, ptr, r_size);
++
++	return r_size;
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Comments: stub function for avoiding LibCURL to print on the standard output.    *
++ *           In case of success, elasticsearch return a JSON, but the HTTP error    *
++ *           code is enough                                                         *
++ *                                                                                  *
++ ************************************************************************************/
++static size_t	curl_write_send_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
++{
++	ZBX_UNUSED(ptr);
++	ZBX_UNUSED(userdata);
++	return size * nmemb;
++}
++
++static history_value_t	history_str2value(char *str, unsigned char value_type)
++{
++	history_value_t	value;
++
++	switch (value_type)
++	{
++		case ITEM_VALUE_TYPE_LOG:
++			value.log = zbx_malloc(NULL, sizeof(zbx_log_value_t));
++			memset(value.log, 0, sizeof(zbx_log_value_t));
++			value.log->value = zbx_strdup(NULL, str);
++			break;
++		case ITEM_VALUE_TYPE_STR:
++		case ITEM_VALUE_TYPE_TEXT:
++			value.str = zbx_strdup(NULL, str);
++			break;
++		case ITEM_VALUE_TYPE_FLOAT:
++			value.dbl = atof(str);
++			break;
++		case ITEM_VALUE_TYPE_UINT64:
++			ZBX_STR2UINT64(value.ui64, str);
++			break;
++	}
++
++	return value;
++}
++
++static const char	*history_value2str(const ZBX_DC_HISTORY *h)
++{
++	static char	buffer[MAX_ID_LEN + 1];
++
++	switch (h->value_type)
++	{
++		case ITEM_VALUE_TYPE_STR:
++		case ITEM_VALUE_TYPE_TEXT:
++			return h->value.str;
++		case ITEM_VALUE_TYPE_LOG:
++			return h->value.log->value;
++		case ITEM_VALUE_TYPE_FLOAT:
++			zbx_snprintf(buffer, sizeof(buffer), ZBX_FS_DBL, h->value.dbl);
++			break;
++		case ITEM_VALUE_TYPE_UINT64:
++			zbx_snprintf(buffer, sizeof(buffer), ZBX_FS_UI64, h->value.ui64);
++			break;
++	}
++
++	return buffer;
++}
++
++static void	clickhouse_log_error(CURL *handle, CURLcode error)
++{
++	long	http_code;
++
++	if (CURLE_HTTP_RETURNED_ERROR == error)
++	{
++		curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &http_code);
++
++		if (0 != page.offset)
++		{
++			zabbix_log(LOG_LEVEL_ERR, "cannot get values from clickhouse, HTTP error: %ld,", http_code);
++		}
++		else
++			zabbix_log(LOG_LEVEL_ERR, "cannot get values from clickhouse, HTTP error: %ld", http_code);
++	}
++	else
++	{
++		zabbix_log(LOG_LEVEL_ERR, "cannot get values from clickhouse: %s", curl_easy_strerror(error));
++	}
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_close                                                          *
++ *                                                                                  *
++ * Purpose: closes connection and releases allocated resources                      *
++ *                                                                                  *
++ * Parameters:  hist - [IN] the history storage interface                           *
++ *                                                                                  *
++ ************************************************************************************/
++static void	clickhouse_close(zbx_history_iface_t *hist)
++{
++	zbx_clickhouse_data_t	*data = hist->data;
++
++	zbx_free(data->buf);
++	zbx_free(data->post_url);
++
++	if (NULL != data->handle)
++	{
++		if (NULL != writer.handle)
++			curl_multi_remove_handle(writer.handle, data->handle);
++
++		curl_easy_cleanup(data->handle);
++		data->handle = NULL;
++	}
++}
++
++/******************************************************************************************************************
++ *                                                                                                                *
++ * common sql service support                                                                                     *
++ *                                                                                                                *
++ ******************************************************************************************************************/
++
++
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_writer_init                                                    *
++ *                                                                                  *
++ * Purpose: initializes clickhouse writer for a new batch of history values            *
++ *                                                                                  *
++ ************************************************************************************/
++static void	clickhouse_writer_init()
++{
++	if (0 != writer.initialized)
++		return;
++
++	zbx_vector_ptr_create(&writer.ifaces);
++
++	if (NULL == (writer.handle = curl_multi_init()))
++	{
++		zbx_error("Cannot initialize cURL multi session");
++		exit(EXIT_FAILURE);
++	}
++
++	writer.initialized = 1;
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_writer_release                                                 *
++ *                                                                                  *
++ * Purpose: releases initialized clickhouse writer by freeing allocated resources and  *
++ *          setting its state to uninitialized.                                     *
++ *                                                                                  *
++ ************************************************************************************/
++static void	clickhouse_writer_release()
++{
++	int	i;
++
++	for (i = 0; i < writer.ifaces.values_num; i++)
++		clickhouse_close(writer.ifaces.values[i]);
++
++	curl_multi_cleanup(writer.handle);
++	writer.handle = NULL;
++
++	zbx_vector_ptr_destroy(&writer.ifaces);
++
++	writer.initialized = 0;
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_writer_add_iface                                               *
++ *                                                                                  *
++ * Purpose: adds history storage interface to be flushed later                      *
++ *                                                                                  *
++ * Parameters: db_insert - [IN] bulk insert data                                    *
++ *                                                                                  *
++ ************************************************************************************/
++static void	clickhouse_writer_add_iface(zbx_history_iface_t *hist)
++{
++	zbx_clickhouse_data_t	*data = hist->data;
++
++	clickhouse_writer_init();
++
++	if (NULL == (data->handle = curl_easy_init()))
++	{
++		zabbix_log(LOG_LEVEL_ERR, "cannot initialize cURL session");
++		return;
++	}
++
++	curl_easy_setopt(data->handle, CURLOPT_URL, data->post_url);
++	curl_easy_setopt(data->handle, CURLOPT_POST, 1);
++	curl_easy_setopt(data->handle, CURLOPT_POSTFIELDS, data->buf);
++	curl_easy_setopt(data->handle, CURLOPT_WRITEFUNCTION, curl_write_send_cb);
++	curl_easy_setopt(data->handle, CURLOPT_FAILONERROR, 1L);
++
++	curl_multi_add_handle(writer.handle, data->handle);
++
++	zbx_vector_ptr_append(&writer.ifaces, hist);
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_writer_flush                                                   *
++ *                                                                                  *
++ * Purpose: posts historical data to clickhouse storage                                *
++ *                                                                                  *
++ ************************************************************************************/
++static int	clickhouse_writer_flush()
++{
++	const char		*__function_name = "clickhouse_writer_flush";
++
++	struct curl_slist	*curl_headers = NULL;
++	int			i, running, previous, msgnum;
++	CURLMsg			*msg;
++	zbx_vector_ptr_t	retries;
++
++	zabbix_log(LOG_LEVEL_DEBUG, "In %s()", __function_name);
++
++	if (0 == writer.initialized)
++		return SUCCEED;
++
++	zbx_vector_ptr_create(&retries);
++
++	curl_headers = curl_slist_append(curl_headers, "Content-Type: application/x-ndjson");
++
++	for (i = 0; i < writer.ifaces.values_num; i++)
++	{
++		zbx_history_iface_t	*hist = (zbx_history_iface_t *)writer.ifaces.values[i];
++		zbx_clickhouse_data_t	*data = hist->data;
++
++		curl_easy_setopt(data->handle, CURLOPT_HTTPHEADER, curl_headers);
++
++		zabbix_log(LOG_LEVEL_DEBUG, "sending %s", data->buf);
++	}
++
++try_again:
++	previous = 0;
++
++	do
++	{
++		int		fds;
++		CURLMcode	code;
++
++		if (CURLM_OK != (code = curl_multi_perform(writer.handle, &running)))
++		{
++			zabbix_log(LOG_LEVEL_ERR, "cannot perform on curl multi handle: %s", curl_multi_strerror(code));
++			break;
++		}
++
++		if (CURLM_OK != (code = curl_multi_wait(writer.handle, NULL, 0, ZBX_HISTORY_STORAGE_DOWN, &fds)))
++		{
++			zabbix_log(LOG_LEVEL_ERR, "cannot wait on curl multi handle: %s", curl_multi_strerror(code));
++			break;
++		}
++
++		if (previous == running)
++			continue;
++
++		while (NULL != (msg = curl_multi_info_read(writer.handle, &msgnum)))
++		{
++			/* If the error is due to malformed data, there is no sense on re-trying to send. */
++			/* That's why we actually check for transport and curl errors separately */
++			if (CURLE_HTTP_RETURNED_ERROR == msg->data.result)
++			{
++				long int	err;
++
++				curl_easy_getinfo(msg->easy_handle, CURLINFO_RESPONSE_CODE, &err);
++
++				zabbix_log(LOG_LEVEL_ERR, "cannot send data to clickhouse, HTTP error %ld",  err);
++			}
++			else if (CURLE_OK != msg->data.result)
++			{
++				zabbix_log(LOG_LEVEL_WARNING, "%s: %s", "cannot send to clickhouse",
++						curl_easy_strerror(msg->data.result));
++
++				/* If the error is due to curl internal problems or unrelated */
++				/* problems with HTTP, we put the handle in a retry list and */
++				/* remove it from the current execution loop */
++				zbx_vector_ptr_append(&retries, msg->easy_handle);
++				curl_multi_remove_handle(writer.handle, msg->easy_handle);
++			}
++		}
++
++		previous = running;
++	}
++	while (running);
++
++	/* We check if we have handles to retry. If yes, we put them back in the multi */
++	/* handle and go to the beginning of the do while() for try sending the data again */
++	/* after sleeping for ZBX_HISTORY_STORAGE_DOWN / 1000 (seconds) */
++	if (0 < retries.values_num)
++	{
++		for (i = 0; i < retries.values_num; i++)
++			curl_multi_add_handle(writer.handle, retries.values[i]);
++
++		zbx_vector_ptr_clear(&retries);
++
++		sleep(ZBX_HISTORY_STORAGE_DOWN / 1000);
++		goto try_again;
++	}
++
++	curl_slist_free_all(curl_headers);
++
++	zbx_vector_ptr_destroy(&retries);
++
++	clickhouse_writer_release();
++
++	zabbix_log(LOG_LEVEL_DEBUG, "End of %s()", __function_name);
++	return SUCCEED;
++}
++
++/******************************************************************************************************************
++ *                                                                                                                *
++ * history interface support                                                                                      *
++ *                                                                                                                *
++ ******************************************************************************************************************/
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_destroy                                                        *
++ *                                                                                  *
++ * Purpose: destroys history storage interface                                      *
++ *                                                                                  *
++ * Parameters:  hist - [IN] the history storage interface                           *
++ *                                                                                  *
++ ************************************************************************************/
++static void	clickhouse_destroy(zbx_history_iface_t *hist)
++{
++	zbx_clickhouse_data_t	*data = hist->data;
++
++	clickhouse_close(hist);
++
++	zbx_free(data->base_url);
++	zbx_free(data);
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_get_values                                                     *
++ *                                                                                  *
++ * Purpose: gets item history data from history storage                             *
++ *                                                                                  *
++ * Parameters:  hist    - [IN] the history storage interface                        *
++ *              itemid  - [IN] the itemid                                           *
++ *              start   - [IN] the period start timestamp                           *
++ *              count   - [IN] the number of values to read                         *
++ *              end     - [IN] the period end timestamp                             *
++ *              values  - [OUT] the item history data values                        *
++ *                                                                                  *
++ * Return value: SUCCEED - the history data were read successfully                  *
++ *               FAIL - otherwise                                                   *
++ *                                                                                  *
++ * Comments: This function reads <count> values from ]<start>,<end>] interval or    *
++ *           all values from the specified interval if count is zero.               *
++ *                                                                                  *
++ ************************************************************************************/
++
++#define ZBX_VALUECACHE_FILL_TIME	600
++
++static int	clickhouse_get_values(zbx_history_iface_t *hist, zbx_uint64_t itemid, int start, int count, int end,
++		zbx_vector_history_record_t *values)
++{
++	const char		*__function_name = "clickhouse_get_values";
++	static int first_run=0;
++	
++
++	zbx_clickhouse_data_t	*data = hist->data;
++
++	int			ret=SUCCEED;
++	int			i;
++
++	CURLcode		err;
++	struct curl_slist	*curl_headers = NULL;
++
++	char	*sql_buffer=NULL;
++	size_t			buf_alloc = 0, buf_offset = 0;
++
++	if (0 == first_run) 
++		first_run = time(NULL);
++	
++	
++	//fix to prevent ValueCache filling on zabbix server startup
++	//in case when there are lots of items it's usually faster to 
++	//fill them via polling and not to kill the database with millions 
++	//of requests
++	if (time(NULL)-first_run < ZBX_VALUECACHE_FILL_TIME) return (ret);
++	
++
++	//remove this after fixing segv on zabbix 4+
++	//but in reality, the server DOES NOT HAVE TO GO TO SLOW DB to get last year's average
++	//it better to plan your checks right or increase ValueCache mem size
++	//return (ret);
++
++	zabbix_log(LOG_LEVEL_DEBUG, "In %s() Data request: we are asked for item%ld starting:%d ending:%d, count:%d", __function_name,itemid,start,end,count);
++
++
++	//HACK FIX TODO make it proper
++	//i see no reason to hold data in the value cache older then 1 day long 
++	//sure there must NOT be triggers with such a demand
++	//this is dirty workaround, has to fix like in ZABBIX history sql module
++	//trying to select data for several periods startign from day and extending 
++	//to month, but i am sure for triggering and alerting data from more then one 
++	//day long isn't really important
++	//
++	//to make things proper remove next condition, i put it here to resolver
++	//clickhouse overload problem but it was something else, amyway i've decided to leave it here
++
++	if (end - start > 86400) {
++	    start=end-86400;
++	} 
++
++
++	if (NULL == (data->handle = curl_easy_init()))
++	{
++		zabbix_log(LOG_LEVEL_ERR, "cannot initialize cURL session");
++
++		return FAIL;
++	}
++
++	zbx_snprintf_alloc(&sql_buffer, &buf_alloc, &buf_offset, "SELECT  toUInt32(clock),ns,value,value_dbl FROM zabbix.history_buffer WHERE itemid=%ld ", itemid);
++
++
++	if (1==end-start) {
++
++		zbx_snprintf_alloc(&sql_buffer, &buf_alloc, &buf_offset, "AND clock = %d ", end);
++
++	} else {
++		if (0 < start) {
++			zbx_snprintf_alloc(&sql_buffer, &buf_alloc, &buf_offset, "AND clock > %d ", start);
++		}
++		if (0 < end ) {
++			zbx_snprintf_alloc(&sql_buffer, &buf_alloc, &buf_offset, "AND clock <= %d ", end);
++		}
++	}
++
++	zbx_snprintf_alloc(&sql_buffer, &buf_alloc, &buf_offset, "ORDER BY clock DESC ");
++
++	if (0<count) 
++	{
++	    zbx_snprintf_alloc(&sql_buffer, &buf_alloc, &buf_offset, "LIMIT %d", count);
++	}
++
++	zabbix_log(LOG_LEVEL_DEBUG, "sending query to clickhouse: %s", sql_buffer);
++
++
++	curl_easy_setopt(data->handle, CURLOPT_URL, data->base_url);
++	curl_easy_setopt(data->handle, CURLOPT_POSTFIELDS, sql_buffer);
++	curl_easy_setopt(data->handle, CURLOPT_WRITEFUNCTION, curl_write_cb);
++	curl_easy_setopt(data->handle, CURLOPT_HTTPHEADER, curl_headers);
++	curl_easy_setopt(data->handle, CURLOPT_FAILONERROR, 1L);
++
++
++	page.offset = 0;
++
++	if (CURLE_OK != (err = curl_easy_perform(data->handle)))
++	{
++		clickhouse_log_error(data->handle, err);
++		goto out;
++	}
++
++
++	curl_easy_setopt(data->handle, CURLOPT_URL, data->post_url);
++
++	
++	zbx_history_record_t	hr;
++
++	zabbix_log(LOG_LEVEL_DEBUG, "recieved from clickhouse: %s", page.data);
++		
++	
++	char *end_str;
++	if (NULL !=page.data && page.data[0]!=0) {
++
++	    //zabbix_log(LOG_LEVEL_DEBUG, "Parcing line by line");
++	    int line_count=0;
++
++	    char *line_ptr = strtok_r(page.data, "\n", &end_str);
++
++	    while (line_ptr != NULL)
++	    {
++		zabbix_log(LOG_LEVEL_DEBUG, "Parsing line '%s'", line_ptr);
++
++		char *end_field;
++		char *field_ptr = strtok_r(line_ptr, "\t", &end_field);
++
++    
++		int field_count=0;
++
++		char *fields[MAX_HISTORY_CLICKHOUSE_FIELDS];
++
++		for (i=0; i++; i<field_count) 
++			fields[i]=NULL; 
++
++		while (field_ptr != NULL && MAX_HISTORY_CLICKHOUSE_FIELDS>field_count) 
++		{	
++
++			fields[field_count++]=field_ptr;
++			field_ptr = strtok_r(NULL, "\t", &end_field);
++		}
++			
++		//the fields order  must be in sync with SQL query above
++		//OR TODO: make it via some proper interface, perhaps JSON or whatever clickhouse supports to 
++		//be able to distingiosh wich value is from what field name, not depending on the order in SQL request
++
++		//this way too much even for debug, maybe it's ok for 5 level ???
++		//zabbix_log(LOG_LEVEL_DEBUG, "Parsed line %d clock:'%s', ns:'%s', value:'%s', value_dbl:'%s' '",line_count, fields[0],fields[1],fields[2],fields[3]);
++
++		if (NULL != fields[3]) 
++		{
++			//we've got at least three fields
++			hr.timestamp.sec = atoi(fields[0]);
++			hr.timestamp.ns = atoi(fields[1]);
++
++			if (ITEM_VALUE_TYPE_UINT64==hist->value_type) 
++			{
++			    hr.value = history_str2value(fields[2], hist->value_type);
++//			    zabbix_log(LOG_LEVEL_DEBUG, "Parsed  as UINT64 %s",fields[2]);
++			}
++
++			if (ITEM_VALUE_TYPE_FLOAT==hist->value_type) 
++			{
++			    hr.value = history_str2value(fields[3], hist->value_type);
++//			    zabbix_log(LOG_LEVEL_DEBUG, "Parsed  as DBL field %s",fields[3]);
++			}
++
++			//adding to zabbix vector
++			zbx_vector_history_record_append_ptr(values, &hr);
++
++			ret=SUCCEED;
++			line_count++;
++		} else {
++			zabbix_log(LOG_LEVEL_DEBUG, "Skipping the result, not enough fields");
++		}
++			
++
++		line_ptr = strtok_r(NULL, "\n", &end_str);
++	    }
++	    page.data[0]=0;	
++	} else 
++	{
++	    zabbix_log(LOG_LEVEL_DEBUG, "No data from clickhouse");
++	    ret = SUCCEED;
++	}
++
++
++out:
++	clickhouse_close(hist);
++	curl_slist_free_all(curl_headers);
++
++	zbx_free(sql_buffer);
++
++	zabbix_log(LOG_LEVEL_DEBUG, "End of %s()", __function_name);
++
++//	return ret;
++
++	//i've decided to keep it succeed always due to following reasons
++
++	//if we retrun fail - then HISTORY WRITER threads will keep them busy
++	//with retrying and actually, killing the database
++	//and the second reason - it's not that important for zabbix to have historical values (IMHO)
++	
++
++	return SUCCEED;
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_add_values                                                     *
++ *                                                                                  *
++ * Purpose: sends history data to the storage                                       *
++ *                                                                                  *
++ * Parameters:  hist    - [IN] the history storage interface                        *
++ *              history - [IN] the history data vector (may have mixed value types) *
++ *                                                                                  *
++ ************************************************************************************/
++static int	clickhouse_add_values(zbx_history_iface_t *hist, const zbx_vector_ptr_t *history)
++{
++	const char	*__function_name = "clickhouse_add_values";
++
++	char *tmp_buffer=NULL;	
++	size_t tmp_alloc=0, tmp_offset=0;
++
++	zbx_clickhouse_data_t	*data = hist->data;
++	int			i, num = 0;
++	ZBX_DC_HISTORY		*h;
++
++	size_t			buf_alloc = 0, buf_offset = 0;
++
++	zabbix_log(LOG_LEVEL_DEBUG, "In %s()", __function_name);
++	
++
++	zbx_snprintf_alloc(&tmp_buffer,&tmp_alloc,&tmp_offset,"INSERT INTO %s VALUES ", CONFIG_HISTORY_STORAGE_TABLE_NAME );
++
++	for (i = 0; i < history->values_num; i++)
++	{
++		h = (ZBX_DC_HISTORY *)history->values[i];
++
++		if (hist->value_type != h->value_type)
++			continue;
++
++		
++		 if (ITEM_VALUE_TYPE_UINT64 == h->value_type) {
++		    //zabbix_log(LOG_LEVEL_DEBUG, "Parsing value as UIN64 type");
++		    zbx_snprintf_alloc(&tmp_buffer,&tmp_alloc,&tmp_offset,"(CAST(%d as date) ,%ld,%d,%d,%ld,0,''),",
++					h->ts.sec,h->itemid,h->ts.sec,h->ts.ns,h->value.ui64);
++		}
++
++		 if (ITEM_VALUE_TYPE_FLOAT == h->value_type) {
++		    //zabbix_log(LOG_LEVEL_DEBUG, "Parsing value as float type");
++		    zbx_snprintf_alloc(&tmp_buffer,&tmp_alloc,&tmp_offset,"(CAST(%d as date) ,%ld,%d,%d,0,%f,''),",
++					h->ts.sec,h->itemid,h->ts.sec,h->ts.ns,h->value.dbl);
++		}
++
++		 if (ITEM_VALUE_TYPE_STR == h->value_type) {
++		    //zabbix_log(LOG_LEVEL_DEBUG, "Parsing value as float type");
++		    zbx_snprintf_alloc(&tmp_buffer,&tmp_alloc,&tmp_offset,"(CAST(%d as date) ,%ld,%d,%d,0,0,'%s'),",
++					h->ts.sec,h->itemid,h->ts.sec,h->ts.ns,h->value.str);
++		}
++
++		if (ITEM_VALUE_TYPE_LOG == h->value_type)
++		{
++			const zbx_log_value_t	*log;
++			log = h->value.log;
++		}
++
++		num++;
++	}
++
++	if (num > 0)
++	{ 
++		zbx_snprintf_alloc(&data->buf, &buf_alloc, &buf_offset, "%s\n", tmp_buffer);
++		zabbix_log(LOG_LEVEL_DEBUG, "will insert to clickhouse: %s",data->buf);
++		data->post_url = zbx_dsprintf(NULL, "%s", data->base_url);
++		clickhouse_writer_add_iface(hist);
++	}
++
++	zabbix_log(LOG_LEVEL_DEBUG, "End of %s()", __function_name);
++	zbx_free(tmp_buffer);
++	return num;
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: clickhouse_flush                                                          *
++ *                                                                                  *
++ * Purpose: flushes the history data to storage                                     *
++ *                                                                                  *
++ * Parameters:  hist    - [IN] the history storage interface                        *
++ *                                                                                  *
++ * Comments: This function will try to flush the data until it succeeds or          *
++ *           unrecoverable error occurs                                             *
++ *                                                                                  *
++ ************************************************************************************/
++static int	clickhouse_flush(zbx_history_iface_t *hist)
++{
++	ZBX_UNUSED(hist);
++
++	return clickhouse_writer_flush();
++}
++
++/************************************************************************************
++ *                                                                                  *
++ * Function: zbx_history_clickhouse_init                                               *
++ *                                                                                  *
++ * Purpose: initializes history storage interface                                   *
++ *                                                                                  *
++ * Parameters:  hist       - [IN] the history storage interface                     *
++ *              value_type - [IN] the target value type                             *
++ *              error      - [OUT] the error message                                *
++ *                                                                                  *
++ * Return value: SUCCEED - the history storage interface was initialized            *
++ *               FAIL    - otherwise                                                *
++ *                                                                                  *
++ ************************************************************************************/
++int	zbx_history_clickhouse_init(zbx_history_iface_t *hist, unsigned char value_type, char **error)
++{
++	zbx_clickhouse_data_t	*data;
++
++	if (0 != curl_global_init(CURL_GLOBAL_ALL))
++	{
++		*error = zbx_strdup(*error, "Cannot initialize cURL library");
++		return FAIL;
++	}
++
++	data = zbx_malloc(NULL, sizeof(zbx_clickhouse_data_t));
++	memset(data, 0, sizeof(zbx_clickhouse_data_t));
++	data->base_url = zbx_strdup(NULL, CONFIG_HISTORY_STORAGE_URL);
++	zbx_rtrim(data->base_url, "/");
++	data->buf = NULL;
++	data->post_url = NULL;
++	data->handle = NULL;
++
++	hist->value_type = value_type;
++	hist->data = data;
++	hist->destroy = clickhouse_destroy;
++	hist->add_values = clickhouse_add_values;
++	hist->flush = clickhouse_flush;
++	hist->get_values = clickhouse_get_values;
++	hist->requires_trends = 0;
++
++	return SUCCEED;
++}
++
++#else
++
++int	zbx_history_clickhouse_init(zbx_history_iface_t *hist, unsigned char value_type, char **error)
++{
++	ZBX_UNUSED(hist);
++	ZBX_UNUSED(value_type);
++
++	*error = zbx_strdup(*error, "cURL library support >= 7.28.0 is required for clickhouse history backend");
++	return FAIL;
++}
++
++#endif
+diff -rNu clickhouse.orig/src/libs/zbxhistory/history.h clickhouse.new/src/libs/zbxhistory/history.h
+--- clickhouse.orig/src/libs/zbxhistory/history.h	2018-10-05 07:00:53.526632784 +0500
++++ clickhouse.new/src/libs/zbxhistory/history.h	2018-09-10 12:53:15.566140772 +0500
+@@ -49,4 +49,7 @@
+ /* elastic hist */
+ int	zbx_history_elastic_init(zbx_history_iface_t *hist, unsigned char value_type, char **error);
+ 
++/* clickhouse hist */
++int	zbx_history_clickhouse_init(zbx_history_iface_t *hist, unsigned char value_type, char **error);
++
+ #endif
+diff -rNu clickhouse.orig/src/libs/zbxhistory/Makefile.am clickhouse.new/src/libs/zbxhistory/Makefile.am
+--- clickhouse.orig/src/libs/zbxhistory/Makefile.am	2018-10-05 07:00:53.526632784 +0500
++++ clickhouse.new/src/libs/zbxhistory/Makefile.am	2018-09-09 23:29:00.877722080 +0500
+@@ -5,4 +5,5 @@
+ libzbxhistory_a_SOURCES = \
+ 	history.c history.h \
+ 	history_sql.c \
+-	history_elastic.c 
++	history_elastic.c \
++	history_clickhouse.c
+diff -rNu clickhouse.orig/src/libs/zbxhistory/Makefile.in clickhouse.new/src/libs/zbxhistory/Makefile.in
+--- clickhouse.orig/src/libs/zbxhistory/Makefile.in	2018-10-05 07:00:53.526632784 +0500
++++ clickhouse.new/src/libs/zbxhistory/Makefile.in	2018-09-10 12:56:33.123010930 +0500
+@@ -121,7 +121,7 @@
+ libzbxhistory_a_AR = $(AR) $(ARFLAGS)
+ libzbxhistory_a_LIBADD =
+ am_libzbxhistory_a_OBJECTS = history.$(OBJEXT) history_sql.$(OBJEXT) \
+-	history_elastic.$(OBJEXT)
++	history_elastic.$(OBJEXT) history_clickhouse.$(OBJEXT) 
+ libzbxhistory_a_OBJECTS = $(am_libzbxhistory_a_OBJECTS)
+ AM_V_P = $(am__v_P_@AM_V@)
+ am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
+@@ -381,7 +381,8 @@
+ libzbxhistory_a_SOURCES = \
+ 	history.c history.h \
+ 	history_sql.c \
+-	history_elastic.c 
++	history_elastic.c \
++	history_clickhouse.c 
+ 
+ all: all-am
+ 
+@@ -434,6 +435,7 @@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/history.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/history_elastic.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/history_sql.Po@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/history_clickhouse.Po@am__quote@
+ 
+ .c.o:
+ @am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.o$$||'`;\
+diff -rNu clickhouse.orig/src/zabbix_server/server.c clickhouse.new/src/zabbix_server/server.c
+--- clickhouse.orig/src/zabbix_server/server.c	2018-10-05 07:00:53.542632381 +0500
++++ clickhouse.new/src/zabbix_server/server.c	2018-10-05 07:32:17.144800896 +0500
+@@ -211,6 +211,11 @@
+ char	*CONFIG_TMPDIR			= NULL;
+ char	*CONFIG_FPING_LOCATION		= NULL;
+ char	*CONFIG_FPING6_LOCATION		= NULL;
++char	*CONFIG_NMAP_LOCATION		= NULL;
++char	*CONFIG_NMAP_PARAMS		= NULL;
++char	*CONFIG_HISTORY_STORAGE_TYPE	= NULL;
++char	*CONFIG_HISTORY_STORAGE_TABLE_NAME = NULL;
++
+ char	*CONFIG_DBHOST			= NULL;
+ char	*CONFIG_DBNAME			= NULL;
+ char	*CONFIG_DBSCHEMA		= NULL;
+@@ -444,6 +449,18 @@
+ 	if (NULL == CONFIG_FPING6_LOCATION)
+ 		CONFIG_FPING6_LOCATION = zbx_strdup(CONFIG_FPING6_LOCATION, "/usr/sbin/fping6");
+ #endif
++	if (NULL == CONFIG_NMAP_LOCATION)
++		CONFIG_NMAP_LOCATION = zbx_strdup(CONFIG_NMAP_LOCATION, "/usr/bin/nmap");
++
++	if (NULL == CONFIG_NMAP_PARAMS)
++		CONFIG_NMAP_PARAMS = zbx_strdup(CONFIG_NMAP_PARAMS, "-n -sn -PE");
++	
++	if (NULL == CONFIG_HISTORY_STORAGE_TYPE)
++		CONFIG_HISTORY_STORAGE_TYPE = zbx_strdup(CONFIG_HISTORY_STORAGE_TYPE, "clickhouse");
++
++	if (NULL == CONFIG_HISTORY_STORAGE_TABLE_NAME)
++		CONFIG_HISTORY_STORAGE_TABLE_NAME = zbx_strdup(CONFIG_HISTORY_STORAGE_TABLE_NAME, "zabbix.history");
++
+ 	if (NULL == CONFIG_EXTERNALSCRIPTS)
+ 		CONFIG_EXTERNALSCRIPTS = zbx_strdup(CONFIG_EXTERNALSCRIPTS, DEFAULT_EXTERNAL_SCRIPTS_PATH);
+ #ifdef HAVE_LIBCURL
+@@ -614,6 +631,10 @@
+ 			PARM_OPT,	0,			0},
+ 		{"FpingLocation",		&CONFIG_FPING_LOCATION,			TYPE_STRING,
+ 			PARM_OPT,	0,			0},
++		{"NmapLocation",		&CONFIG_NMAP_LOCATION,			TYPE_STRING,
++			PARM_OPT,	0,			0},
++		{"NmapParams",		&CONFIG_NMAP_PARAMS,			TYPE_STRING,
++			PARM_OPT,	0,			0},
+ 		{"Fping6Location",		&CONFIG_FPING6_LOCATION,		TYPE_STRING,
+ 			PARM_OPT,	0,			0},
+ 		{"Timeout",			&CONFIG_TIMEOUT,			TYPE_INT,
+@@ -718,6 +739,10 @@
+ 			PARM_OPT,	0,			0},
+ 		{"ExportFileSize",		&CONFIG_EXPORT_FILE_SIZE,		TYPE_UINT64,
+ 			PARM_OPT,	ZBX_MEBIBYTE,	ZBX_GIBIBYTE},
++		{"HistoryStorageType",		&CONFIG_HISTORY_STORAGE_TYPE,		TYPE_STRING,
++			PARM_OPT,	1,			0},
++		{"HistoryStorageTableName",		&CONFIG_HISTORY_STORAGE_TABLE_NAME,		TYPE_STRING,
++			PARM_OPT,	1,			0},
+ 		{NULL}
+ 	};
+ 
