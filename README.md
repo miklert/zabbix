@@ -10,30 +10,33 @@ It’s very likely something will break, won’t work and you will be the only o
 1. Clickhouse history offloading. Enjoy having data for years without MySQL/Postgress hassle at 50kNVPS.
 2. Asynchronous SNMP processing. Beware! “Discovery” items will work the old slow synchronous way
 3. Surprise… Asynchronous agent polling. Enjoy polling all your passive agents in a breeze. A couple of async agent polling threads will do all the work. Ok, ok, maybe 3 or 4 for really big installs (thousands of hosts)
-4. And a Frankenstein – unreachable poller combines two worlds now – it will try async methods first and after failing them, will use sync methods/
+4. And a Frankenstein – unreachable poller combines two worlds now – it will try async methods first and after failing them, will use old good sync methods.
 5. Nmap accessibility checks. IPv4 only. Let me know if you need IPv6, and why.
 6. Preproc manager with two sockets and queuing control. For those who monitors on really tight hardware.
 7. Sorry guys, no “fast” widgets yet. They coming. A sort of.  I just need to rethink a few points. However for “problems.get” message is working on server. Feel free to use it, and please note that you’ll get only the problems happened since the server start.
 8. Proxy is not tested yet. We don’t use them anymore. No reason. But sure this is coming also.
-9. Worker locks are fixed by zabbix team, thank you guys.
+9. Worker locks are fixed by zabbix team, thank you, **Zabbix guys**.
 
 ## First of all, what version ? 
 
-This is today’s zabbix-4.0.1rc2
-The <Patch link> will work on both rc1 and rc2 and probably won’t on 4.0.0lts (there are nice cosmetic changes in main THREAD loops which make patch not compartible with 4.0.0). However, good news: there is no DB upgrade, so you can go back/forward without db backup and rollback (well, backup anyway, at least sometimes).
+The sources is zabbix-4.0.1rc2
+The patch will work on both **rc1** and **rc2** and probably won’t on **4.0.0lts** (there are nice cosmetic changes in main THREAD loops which make patch not compartible with it). However, good news: there is no DB upgrade needed, so you can go back/forward without db backup and rollback (well,you should backup anyway, at least sometimes).
 
 ## Now, how to put it all together.
 First, download the sources:
-git clone 
 
-or the patch.
-Place patch (https://github.com/miklert/zabbix/blob/master/zabbix.patch) inside zabbix-4.0.Xxx folder and patch it:
+git clone https://github.com/miklert/zabbix.git
+
+Or the patch and original sources from https://zabbix.com/downloads/.
+
+Unpack, place patch (https://github.com/miklert/zabbix/blob/master/zabbix.patch) inside zabbix-4.0.Xxx folder and patch it:
 
 patch -p1  < the_patch
 
 Then configure, setup, prepare the usual way: https://www.zabbix.com/documentation/4.0/manual/installation/install
 
-And now, the new part: 
+And now, the part wich is unique for this install: 
+
 ## 1. Set up pollers:
 
 The two fellows are responsible for async SNMP and AGENT collection:
