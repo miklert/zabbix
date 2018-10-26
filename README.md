@@ -20,7 +20,7 @@ It’s very likely something will break, won’t work and you will be the only o
 ## First of all, what version ? 
 
 The sources is zabbix-4.0.1rc2
-The patch will work on both **rc1** and **rc2** and probably won’t on **4.0.0lts** (there are nice cosmetic changes in main THREAD loops which make patch not compartible with it). However, good news: there is no DB upgrade needed, so you can go back/forward without db backup and rollback (well,you should backup anyway, at least sometimes).
+The patch will work on both **rc1** and **rc2** and probably won’t on **4.0.0lts** (there are nice cosmetic changes in main THREAD loops which make patch not compartible with it). However, good news: there is no DB upgrade needed, so you can go back/forward without db backup and rollback. Actually you should backup anyway, at least sometimes.
 
 ## Now, how to put it all together.
 First, download the sources:
@@ -35,7 +35,7 @@ patch -p1  < the_patch
 
 Then configure, setup, prepare the usual way: https://www.zabbix.com/documentation/4.0/manual/installation/install
 
-And now, the part wich is unique for this install: 
+# And now, the part wich is unique for this patched version: 
 
 ## 1. Set up pollers:
 
@@ -52,6 +52,10 @@ Feel free to switch them off by setting =0, so zabbix_server will poll the usual
 ## 2. The Clickhouse setup.
 I’ve wrote a post someday: https://mmakurov.blogspot.com/2018/07/zabbix-clickhouse-details.html
 
+there is some problems you should know:
+- be prapared to have some data delay on graphs which depends on you data rates and clickhouse buffer sizes
+- zabbix server starts leaking when it reads str and txt data form history storage. I am trying to find reason for it, but for now fetching str and text values is disabled, but you can still save them and fetch from web ui. 
+
 ## 3. Nmap:
 Zabbix server will use nmap for icmp* checks with packet count set to 1.
 If you need granular packet loss, say 58%, calculate it in triggers. And setup such an accessibility checks each 10-15 seconds
@@ -64,3 +68,4 @@ However I would be interested to know if you do have such a requirements, perhap
 I really don’t want to release widgets yet as they are still in prototype stage and there is a big architecture problem – what they show is the only true since zabbix restart. I have two alternatives to fix that – either force zabbix_server on start to load all active problems from DB to memory or to ignore DB state on zabbix start and consider all triggers in OK state. Which will break problems start time.  And there is really simple fix possible, so I will add separate fixed widgets soon.
 
 ## 5. Proxy compiles, but I haven’t tested it at all. 
+
