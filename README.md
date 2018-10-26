@@ -55,6 +55,7 @@ I’ve wrote a post someday: https://mmakurov.blogspot.com/2018/07/zabbix-clickh
 there is some problems you should know:
 - be prapared to have some data delay on graphs which depends on you data rates and clickhouse buffer sizes
 - zabbix server starts leaking when it reads str and txt data form history storage. I am trying to find reason for it, but for now fetching str and text values is disabled, but you can still save them and fetch from web ui. 
+- Latest data panel will not show data dynamics (change in latest metrics to previosly connects). You might want to remove the new code and uncomment the "original" version so it will work, but it's too slow for hosts that have more then a hundred items. 
 
 ## 3. Nmap:
 Zabbix server will use nmap for icmp* checks with packet count set to 1.
