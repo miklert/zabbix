@@ -27,7 +27,8 @@ First, download the sources:
 git clone 
 
 or the patch.
-Place patch (https://github.com/miklert/zabbix/blob/master/zabbix.patch) inside zabbix-4.0.Xxx folder and patch it
+Place patch (https://github.com/miklert/zabbix/blob/master/zabbix.patch) inside zabbix-4.0.Xxx folder and patch it:
+
 patch -p1  < the_patch
 
 Then configure, setup, prepare the usual way: https://www.zabbix.com/documentation/4.0/manual/installation/install
