@@ -1,6 +1,4 @@
-# zabbix
-
-So, I am finally releasing the changes I did to make zabbix somewhat faster or let me say, better.
+I am finally releasing the changes I did to make zabbix somewhat faster or let me say, better.
 Here the most important ones:
 
 0. Before you start please make sure that the right reason to start using this code is your will to get some new experience or achieve an extraordinary results.
