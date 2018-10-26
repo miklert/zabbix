@@ -35,9 +35,9 @@ patch -p1  < the_patch
 
 Then configure, setup, prepare the usual way: https://www.zabbix.com/documentation/4.0/manual/installation/install
 
-# And now, the part wich is unique for this patched version: 
+# And now, the part which is unique for this patched version: 
 
-## 1. Set up pollers:
+## 1. Set up asynchronous pollers:
 
 The two fellows are responsible for async SNMP and AGENT collection:
 
@@ -53,9 +53,9 @@ Feel free to switch them off by setting =0, so zabbix_server will poll the usual
 I’ve wrote a post someday: https://mmakurov.blogspot.com/2018/07/zabbix-clickhouse-details.html
 
 there is some problems you should know:
-- be prapared to have some data delay on graphs which depends on you data rates and clickhouse buffer sizes
+- be prepared to have some data delay on graphs which depends on you data rates and clickhouse buffer sizes
 - zabbix server starts leaking when it reads str and txt data form history storage. I am trying to find reason for it, but for now fetching str and text values is disabled, but you can still save them and fetch from web ui. 
-- Latest data panel will not show data dynamics (change in latest metrics to previosly connects). You might want to remove the new code and uncomment the "original" version so it will work, but it's too slow for hosts that have more then a hundred items. 
+- Latest data panel will not show data dynamics (change in latest metrics to previously connects). You might want to remove the new code and uncomment the "original" version so it will work, but it's too slow for hosts that have more then a hundred items. 
 
 ## 3. Nmap:
 Zabbix server will use nmap for icmp* checks with packet count set to 1.
@@ -69,4 +69,3 @@ However I would be interested to know if you do have such a requirements, perhap
 I really don’t want to release widgets yet as they are still in prototype stage and there is a big architecture problem – what they show is the only true since zabbix restart. I have two alternatives to fix that – either force zabbix_server on start to load all active problems from DB to memory or to ignore DB state on zabbix start and consider all triggers in OK state. Which will break problems start time.  And there is really simple fix possible, so I will add separate fixed widgets soon.
 
 ## 5. Proxy compiles, but I haven’t tested it at all. 
-
