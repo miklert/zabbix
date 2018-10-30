@@ -158,6 +158,8 @@ int	CONFIG_HOUSEKEEPER_FORKS	= 1;
 int	CONFIG_PINGER_FORKS		= 1;
 int	CONFIG_POLLER_FORKS		= 5;
 int	CONFIG_UNREACHABLE_POLLER_FORKS	= 1;
+int	CONFIG_ASYNC_SNMP_POLLER_FORKS	= 1;
+int	CONFIG_ASYNC_AGENT_POLLER_FORKS	= 1;
 int	CONFIG_HTTPPOLLER_FORKS		= 1;
 int	CONFIG_IPMIPOLLER_FORKS		= 0;
 int	CONFIG_TIMER_FORKS		= 1;
@@ -212,6 +214,11 @@ char	*CONFIG_EXTERNALSCRIPTS		= NULL;
 char	*CONFIG_TMPDIR			= NULL;
 char	*CONFIG_FPING_LOCATION		= NULL;
 char	*CONFIG_FPING6_LOCATION		= NULL;
+char	*CONFIG_NMAP_LOCATION		= NULL;
+char	*CONFIG_NMAP_PARAMS		= NULL;
+char	*CONFIG_HISTORY_STORAGE_TYPE	= NULL;
+char	*CONFIG_HISTORY_STORAGE_TABLE_NAME = NULL;
+
 char	*CONFIG_DBHOST			= NULL;
 char	*CONFIG_DBNAME			= NULL;
 char	*CONFIG_DBSCHEMA		= NULL;
@@ -377,6 +384,16 @@ int	get_process_info_by_thread(int local_server_num, unsigned char *local_proces
 		*local_process_type = ZBX_PROCESS_TYPE_UNREACHABLE;
 		*local_process_num = local_server_num - server_count + CONFIG_UNREACHABLE_POLLER_FORKS;
 	}
+	else if (local_server_num <= (server_count += CONFIG_ASYNC_SNMP_POLLER_FORKS))
+	{
+		*local_process_type = ZBX_PROCESS_TYPE_ASYNC_SNMP;
+		*local_process_num = local_server_num - server_count + CONFIG_ASYNC_SNMP_POLLER_FORKS;
+	}
+	else if (local_server_num <= (server_count += CONFIG_ASYNC_AGENT_POLLER_FORKS))
+	{
+		*local_process_type = ZBX_PROCESS_TYPE_ASYNC_AGENT;
+		*local_process_num = local_server_num - server_count + CONFIG_ASYNC_AGENT_POLLER_FORKS;
+	}
 	else if (local_server_num <= (server_count += CONFIG_TRAPPER_FORKS))
 	{
 		*local_process_type = ZBX_PROCESS_TYPE_TRAPPER;
@@ -445,6 +462,18 @@ static void	zbx_set_defaults(void)
 	if (NULL == CONFIG_FPING6_LOCATION)
 		CONFIG_FPING6_LOCATION = zbx_strdup(CONFIG_FPING6_LOCATION, "/usr/sbin/fping6");
 #endif
+	if (NULL == CONFIG_NMAP_LOCATION)
+		CONFIG_NMAP_LOCATION = zbx_strdup(CONFIG_NMAP_LOCATION, "/usr/bin/nmap");
+
+	if (NULL == CONFIG_NMAP_PARAMS)
+		CONFIG_NMAP_PARAMS = zbx_strdup(CONFIG_NMAP_PARAMS, "-n -sn -PE");
+	
+	if (NULL == CONFIG_HISTORY_STORAGE_TYPE)
+		CONFIG_HISTORY_STORAGE_TYPE = zbx_strdup(CONFIG_HISTORY_STORAGE_TYPE, "clickhouse");
+
+	if (NULL == CONFIG_HISTORY_STORAGE_TABLE_NAME)
+		CONFIG_HISTORY_STORAGE_TABLE_NAME = zbx_strdup(CONFIG_HISTORY_STORAGE_TABLE_NAME, "zabbix.history");
+
 	if (NULL == CONFIG_EXTERNALSCRIPTS)
 		CONFIG_EXTERNALSCRIPTS = zbx_strdup(CONFIG_EXTERNALSCRIPTS, DEFAULT_EXTERNAL_SCRIPTS_PATH);
 #ifdef HAVE_LIBCURL
@@ -580,6 +609,10 @@ static void	zbx_load_config(ZBX_TASK_EX *task)
 			PARM_OPT,	0,			1000},
 		{"StartPollersUnreachable",	&CONFIG_UNREACHABLE_POLLER_FORKS,	TYPE_INT,
 			PARM_OPT,	0,			1000},
+		{"StartPollersAsyncSNMP",	&CONFIG_ASYNC_SNMP_POLLER_FORKS,	TYPE_INT,
+			PARM_OPT,	0,			100},
+		{"StartPollersAsyncAGENT",	&CONFIG_ASYNC_AGENT_POLLER_FORKS,	TYPE_INT,
+			PARM_OPT,	0,			100},
 		{"StartIPMIPollers",		&CONFIG_IPMIPOLLER_FORKS,		TYPE_INT,
 			PARM_OPT,	0,			1000},
 		{"StartTimers",			&CONFIG_TIMER_FORKS,			TYPE_INT,
@@ -617,6 +650,10 @@ static void	zbx_load_config(ZBX_TASK_EX *task)
 		{"TmpDir",			&CONFIG_TMPDIR,				TYPE_STRING,
 			PARM_OPT,	0,			0},
 		{"FpingLocation",		&CONFIG_FPING_LOCATION,			TYPE_STRING,
+			PARM_OPT,	0,			0},
+		{"NmapLocation",		&CONFIG_NMAP_LOCATION,			TYPE_STRING,
+			PARM_OPT,	0,			0},
+		{"NmapParams",		&CONFIG_NMAP_PARAMS,			TYPE_STRING,
 			PARM_OPT,	0,			0},
 		{"Fping6Location",		&CONFIG_FPING6_LOCATION,		TYPE_STRING,
 			PARM_OPT,	0,			0},
@@ -722,6 +759,10 @@ static void	zbx_load_config(ZBX_TASK_EX *task)
 			PARM_OPT,	0,			0},
 		{"ExportFileSize",		&CONFIG_EXPORT_FILE_SIZE,		TYPE_UINT64,
 			PARM_OPT,	ZBX_MEBIBYTE,	ZBX_GIBIBYTE},
+		{"HistoryStorageType",		&CONFIG_HISTORY_STORAGE_TYPE,		TYPE_STRING,
+			PARM_OPT,	1,			0},
+		{"HistoryStorageTableName",		&CONFIG_HISTORY_STORAGE_TABLE_NAME,		TYPE_STRING,
+			PARM_OPT,	1,			0},
 		{NULL}
 	};
 
@@ -945,7 +986,7 @@ int	MAIN_ZABBIX_ENTRY(int flags)
 	zabbix_log(LOG_LEVEL_INFORMATION, "VMware monitoring:         " VMWARE_FEATURE_STATUS);
 	zabbix_log(LOG_LEVEL_INFORMATION, "SMTP authentication:       " SMTP_AUTH_FEATURE_STATUS);
 	zabbix_log(LOG_LEVEL_INFORMATION, "Jabber notifications:      " JABBER_FEATURE_STATUS);
-	zabbix_log(LOG_LEVEL_INFORMATION, "Ez Texting notifications:  " LIBCURL_FEATURE_STATUS);
+	zabbix_log(LOG_LEVEL_INFORMATION, "CURL support:		" LIBCURL_FEATURE_STATUS);
 	zabbix_log(LOG_LEVEL_INFORMATION, "ODBC:                      " ODBC_FEATURE_STATUS);
 	zabbix_log(LOG_LEVEL_INFORMATION, "SSH2 support:              " SSH2_FEATURE_STATUS);
 	zabbix_log(LOG_LEVEL_INFORMATION, "IPv6 support:              " IPV6_FEATURE_STATUS);
@@ -1061,7 +1102,8 @@ int	MAIN_ZABBIX_ENTRY(int flags)
 	zbx_vc_enable();
 
 	threads_num = CONFIG_CONFSYNCER_FORKS + CONFIG_POLLER_FORKS
-			+ CONFIG_UNREACHABLE_POLLER_FORKS + CONFIG_TRAPPER_FORKS + CONFIG_PINGER_FORKS
+			+ CONFIG_UNREACHABLE_POLLER_FORKS + CONFIG_ASYNC_SNMP_POLLER_FORKS 
+			+ CONFIG_ASYNC_AGENT_POLLER_FORKS + CONFIG_TRAPPER_FORKS + CONFIG_PINGER_FORKS
 			+ CONFIG_ALERTER_FORKS + CONFIG_HOUSEKEEPER_FORKS + CONFIG_TIMER_FORKS
 			+ CONFIG_HTTPPOLLER_FORKS + CONFIG_DISCOVERER_FORKS + CONFIG_HISTSYNCER_FORKS
 			+ CONFIG_ESCALATOR_FORKS + CONFIG_IPMIPOLLER_FORKS + CONFIG_JAVAPOLLER_FORKS
@@ -1110,6 +1152,16 @@ int	MAIN_ZABBIX_ENTRY(int flags)
 				break;
 			case ZBX_PROCESS_TYPE_UNREACHABLE:
 				poller_type = ZBX_PROCESS_TYPE_UNREACHABLE;
+				thread_args.args = &poller_type;
+				threads[i] = zbx_thread_start(poller_thread, &thread_args);
+				break;
+			case ZBX_PROCESS_TYPE_ASYNC_SNMP:
+				poller_type = ZBX_POLLER_TYPE_ASYNC_SNMP;
+				thread_args.args = &poller_type;
+				threads[i] = zbx_thread_start(poller_thread, &thread_args);
+				break;
+			case ZBX_PROCESS_TYPE_ASYNC_AGENT:
+				poller_type = ZBX_POLLER_TYPE_ASYNC_AGENT;
 				thread_args.args = &poller_type;
 				threads[i] = zbx_thread_start(poller_thread, &thread_args);
 				break;
