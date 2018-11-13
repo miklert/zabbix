@@ -2714,3 +2714,285 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  			case ZBX_PROCESS_TYPE_TRAPPER:
  				thread_args.args = &listen_sock;
  				threads[i] = zbx_thread_start(trapper_thread, &thread_args);
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' zabbix-4.0.0/src/zabbix_server/poller/poller.c xe-rabbix/src/zabbix_server/poller/poller.c
+--- zabbix-4.0.0/src/zabbix_server/poller/poller.c	2018-10-17 23:18:07.370357400 +0500
++++ xe-rabbix/src/zabbix_server/poller/poller.c	2018-11-13 16:58:58.764535905 +0500
+@@ -496,23 +496,62 @@
+  * Author: Alexei Vladishev                                                   *
+  *                                                                            *
+  * Comments: processes single item at a time except for Java, SNMP items,     *
++ * 				agent
++ * 		    																  *
+  *           see DCconfig_get_poller_items()                                  *
+  *                                                                            *
+  ******************************************************************************/
+-static int	get_values(unsigned char poller_type, int *nextcheck)
++static int	get_values(unsigned char poller_type, int *nextcheck,int *processed_num)
+ {
+ 	const char		*__function_name = "get_values";
+-	DC_ITEM			items[MAX_POLLER_ITEMS];
+-	AGENT_RESULT		results[MAX_POLLER_ITEMS];
+-	int			errcodes[MAX_POLLER_ITEMS];
++	//stack is noet enough for 8k items
++	DC_ITEM			*items;//[MAX_POLLER_ITEMS];
++	AGENT_RESULT		*results;//[MAX_POLLER_ITEMS];
++	int			*errcodes;//[MAX_POLLER_ITEMS];
+ 	zbx_timespec_t		timespec;
+ 	char			*port = NULL, error[ITEM_ERROR_LEN_MAX];
+-	int			i, num, last_available = HOST_AVAILABLE_UNKNOWN;
++	int			i, num_collected=0, num, last_available = HOST_AVAILABLE_UNKNOWN, MAX_ITEMS=1;
+ 	zbx_vector_ptr_t	add_results;
+-
++	
+ 	zabbix_log(LOG_LEVEL_DEBUG, "In %s()", __function_name);
+ 
++	switch (poller_type)
++	{
++		case ZBX_POLLER_TYPE_ASYNC_AGENT:
++			MAX_ITEMS=MAX_ASYNC_AGENT_ITEMS;
++			break;
++		case ZBX_POLLER_TYPE_ASYNC_SNMP:
++			MAX_ITEMS=MAX_ASYNC_SNMP_ITEMS;
++			break;
++		case ZBX_POLLER_TYPE_UNREACHABLE:
++			MAX_ITEMS=MAX_UNREACH_ITEMS;
++			break;
++		default: 
++			MAX_ITEMS=MAX_POLLER_ITEMS;
++	}
++
++	if (NULL == (items=zbx_malloc(NULL,sizeof(DC_ITEM)*MAX_ITEMS))) 
++	{
++		zabbix_log(LOG_LEVEL_WARNING,"Cannot allocate memory for polling");
++		return FAIL;
++	};
++	if (NULL == (results=zbx_malloc(NULL,sizeof(AGENT_RESULT)*MAX_ITEMS))) 
++	{
++		zabbix_log(LOG_LEVEL_WARNING,"Cannot allocate memory for polling");
++		return FAIL;
++	};
++	if (NULL == (errcodes=zbx_malloc(NULL,sizeof(int)*MAX_ITEMS))) 
++	{
++		zabbix_log(LOG_LEVEL_WARNING,"Cannot allocate memory for polling");
++		return FAIL;
++	};
++ 
++
+ 	num = DCconfig_get_poller_items(poller_type, items);
++	*processed_num=num;
++
++	zabbix_log(LOG_LEVEL_DEBUG, "In %s(), got %d items", __function_name,num);
++
+ 
+ 	if (0 == num)
+ 	{
+@@ -524,7 +563,7 @@
+ 	for (i = 0; i < num; i++)
+ 	{
+ 		init_result(&results[i]);
+-		errcodes[i] = SUCCEED;
++		errcodes[i] = NOT_PROCESSED;
+ 
+ 		ZBX_STRDUP(items[i].key, items[i].key_orig);
+ 		if (SUCCEED != substitute_key_macros(&items[i].key, NULL, &items[i], NULL,
+@@ -700,41 +739,52 @@
+ 	}
+ 
+ 	zbx_free(port);
+-
+ 	zbx_vector_ptr_create(&add_results);
+ 
+-	/* retrieve item values */
+-	if (SUCCEED == is_snmp_type(items[0].type))
+-	{
+ #ifdef HAVE_NETSNMP
+-		/* SNMP checks use their own timeouts */
+-		get_values_snmp(items, results, errcodes, num);
+-#else
+-		for (i = 0; i < num; i++)
+-		{
+-			if (SUCCEED != errcodes[i])
+-				continue;
+-
+-			SET_MSG_RESULT(&results[i], zbx_strdup(NULL, "Support for SNMP checks was not compiled in."));
+-			errcodes[i] = CONFIG_ERROR;
+-		}
+-#endif
++	if (ZBX_POLLER_TYPE_ASYNC_SNMP == poller_type  || ZBX_POLLER_TYPE_UNREACHABLE == poller_type) {
++		get_values_snmp_async(items, results, errcodes, num);
+ 	}
+-	else if (ITEM_TYPE_JMX == items[0].type)
+-	{
+-		zbx_alarm_on(CONFIG_TIMEOUT);
+-		get_values_java(ZBX_JAVA_GATEWAY_REQUEST_JMX, items, results, errcodes, num);
+-		zbx_alarm_off();
+-	}
+-	else if (1 == num)
++#endif
++	if (ZBX_POLLER_TYPE_ASYNC_AGENT == poller_type || ZBX_POLLER_TYPE_UNREACHABLE == poller_type) 
+ 	{
+-		if (SUCCEED == errcodes[0])
+-			errcodes[0] = get_value(&items[0], &results[0], &add_results);
++		get_value_agent_async(items, results, errcodes, num);
+ 	}
+-	else
+-		THIS_SHOULD_NEVER_HAPPEN;
+ 
++	/* by design normal threads where not likely to get */
++	/* more then one item to process, but for future  */
++	/* to allow poller to take several tasks, this 	  */
++	/* part is fixed to be ready for it 		  */
++	for (i = 0; i < num; i++) {
++		/* it maybe that some items are already processed by async methods, skipping them */		
++		if ( NOT_PROCESSED == errcodes[i]) {
++			/* retrieve item values */
++			if (SUCCEED == is_snmp_type(items[i].type))
++			{	
++#ifdef HAVE_NETSNMP
++				/* SNMP checks use their own timeouts */
++				get_values_snmp(items+i, results+i, errcodes+i, 1);
++#else
++				SET_MSG_RESULT(&results[i], zbx_strdup(NULL, "Support for SNMP checks was not compiled in."));
++				errcodes[i] = CONFIG_ERROR;
++#endif
++			}
++			else if (ITEM_TYPE_JMX == items[i].type)
++			{
++				zbx_alarm_on(CONFIG_TIMEOUT);
++				get_values_java(ZBX_JAVA_GATEWAY_REQUEST_JMX, items+i, results+i, errcodes+i, 1);
++				zbx_alarm_off();
++			}
++			else 
++			{	
++				zabbix_log(LOG_LEVEL_DEBUG, "Starting single get_value agent poller call");
++				errcodes[i] = get_value(&items[i], &results[i], &add_results);
++			}
++		}	
++	}
++	
+ 	zbx_timespec(&timespec);
++	
+ 
+ 	/* process item values */
+ 	for (i = 0; i < num; i++)
+@@ -753,12 +803,20 @@
+ 			case NETWORK_ERROR:
+ 			case GATEWAY_ERROR:
+ 			case TIMEOUT_ERROR:
+-				if (HOST_AVAILABLE_FALSE != last_available)
++				/* for mass problems don't mark host as unreach for async and unreach pollers, because:
++				first, that sometimes causes a "poll" bug in mysql lib (100% core load on waiting for smth from mysql, probably solvable by alarm)
++				second, there seems to be no reason for that, async pollers live just fine having even all hosts unreachable */
++				if ( HOST_AVAILABLE_FALSE != last_available && 
++						(ZBX_POLLER_TYPE_NORMAL == poller_type || 
++						 ZBX_POLLER_TYPE_JAVA == poller_type ) )
+ 				{
+ 					zbx_deactivate_item_host(&items[i], &timespec, results[i].msg);
+ 					last_available = HOST_AVAILABLE_FALSE;
+ 				}
+ 				break;
++			case NOT_PROCESSED:
++				//this might happen on asyn processing for snmp
++				//when a host fails answering an item, next ones are not requested
+ 			case CONFIG_ERROR:
+ 				/* nothing to do */
+ 				break;
+@@ -772,6 +830,7 @@
+ 			if (0 == add_results.values_num)
+ 			{
+ 				items[i].state = ITEM_STATE_NORMAL;
++				num_collected++;
+ 				zbx_preprocess_item_value(items[i].itemid, items[i].value_type, items[i].flags,
+ 						&results[i], &timespec, items[i].state, NULL);
+ 			}
+@@ -789,6 +848,7 @@
+ 					if (ISSET_MSG(add_result))
+ 					{
+ 						items[i].state = ITEM_STATE_NOTSUPPORTED;
++						num_collected++;
+ 						zbx_preprocess_item_value(items[i].itemid, items[i].value_type,
+ 								items[i].flags, NULL, &ts_tmp, items[i].state,
+ 								add_result->msg);
+@@ -796,6 +856,7 @@
+ 					else
+ 					{
+ 						items[i].state = ITEM_STATE_NORMAL;
++						num_collected++;
+ 						zbx_preprocess_item_value(items[i].itemid, items[i].value_type,
+ 								items[i].flags, add_result, &ts_tmp, items[i].state,
+ 								NULL);
+@@ -813,12 +874,13 @@
+ 		else if (NOTSUPPORTED == errcodes[i] || AGENT_ERROR == errcodes[i] || CONFIG_ERROR == errcodes[i])
+ 		{
+ 			items[i].state = ITEM_STATE_NOTSUPPORTED;
++			num_collected++;
+ 			zbx_preprocess_item_value(items[i].itemid, items[i].value_type, items[i].flags, NULL, &timespec,
+ 					items[i].state, results[i].msg);
+ 		}
+ 
+ 		DCpoller_requeue_items(&items[i].itemid, &items[i].state, &timespec.sec, &errcodes[i], 1, poller_type,
+-				nextcheck);
++					nextcheck);
+ 
+ 		zbx_free(items[i].key);
+ 
+@@ -863,30 +925,40 @@
+ 				zbx_free(items[i].jmx_endpoint);
+ 				break;
+ 		}
+-
+ 		free_result(&results[i]);
+ 	}
+-
++	
+ 	zbx_preprocessor_flush();
+ 	zbx_vector_ptr_clear_ext(&add_results, (zbx_mem_free_func_t)free_result_ptr);
+ 	zbx_vector_ptr_destroy(&add_results);
+ 
+ 	DCconfig_clean_items(items, NULL, num);
+-exit:
+-	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%d", __function_name, num);
+ 
+-	return num;
++exit:	
++
++	zbx_free(items);
++	zbx_free(results);
++	zbx_free(errcodes);
++
++
++	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%d", __function_name, num);
++	return num_collected;
+ }
+ 
++#define	STAT_INTERVAL	20	
++#define SLEEP_USEC	20000
++
+ ZBX_THREAD_ENTRY(poller_thread, args)
+ {
+-	int		nextcheck, sleeptime = -1, processed = 0, old_processed = 0;
+-	double		sec, total_sec = 0.0, old_total_sec = 0.0;
++	int		nextcheck;
++	// sleeptime = -1, 
++	//processed_total = 0, old_processed = 0;
++	double		start_sec, work_sec =0.0, sleep_sec=0.0;
++	// total_sec = 0.0, old_total_sec = 0.0;
+ 	time_t		last_stat_time;
+ 	unsigned char	poller_type;
+-
+-#define	STAT_INTERVAL	5	/* if a process is busy and does not sleep then update status not faster than */
+-				/* once in STAT_INTERVAL seconds */
++	
++	unsigned int collected_per_interval=0, collected_per_run=0, processed_per_interval=0, processed_per_run=0, runs=0;
+ 
+ 	poller_type = *(unsigned char *)((zbx_thread_args_t *)args)->args;
+ 	process_type = ((zbx_thread_args_t *)args)->process_type;
+@@ -897,7 +969,7 @@
+ 	zabbix_log(LOG_LEVEL_INFORMATION, "%s #%d started [%s #%d]", get_program_type_string(program_type),
+ 			server_num, get_process_type_string(process_type), process_num);
+ #ifdef HAVE_NETSNMP
+-	if (ZBX_POLLER_TYPE_NORMAL == poller_type || ZBX_POLLER_TYPE_UNREACHABLE == poller_type)
++	if (ZBX_POLLER_TYPE_NORMAL == poller_type || ZBX_POLLER_TYPE_UNREACHABLE == poller_type || ZBX_POLLER_TYPE_ASYNC_SNMP == poller_type)
+ 		zbx_init_snmp();
+ #endif
+ 
