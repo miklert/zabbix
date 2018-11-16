@@ -411,13 +411,20 @@ static void	add_icmpping_item(icmpitem_t **items, int *items_alloc, int *items_c
 static void	get_pinger_hosts(icmpitem_t **icmp_items, int *icmp_items_alloc, int *icmp_items_count)
 {
 	const char		*__function_name = "get_pinger_hosts";
-	DC_ITEM			items[MAX_PINGER_ITEMS];
+	DC_ITEM			*items;
 	int			i, num, count, interval, size, timeout, rc, errcode = SUCCEED;
 	char			error[MAX_STRING_LEN], *addr = NULL;
 	icmpping_t		icmpping;
 	icmppingsec_type_t	type;
 
 	zabbix_log(LOG_LEVEL_DEBUG, "In %s()", __function_name);
+	
+
+	if (NULL == (items=zbx_malloc(NULL,sizeof(DC_ITEM)*MAX_PINGER_ITEMS))) 
+	{
+		zabbix_log(LOG_LEVEL_WARNING,"Cannot allocate memory for pinger items");
+		return;
+	}
 
 	num = DCconfig_get_poller_items(ZBX_POLLER_TYPE_PINGER, items);
 
@@ -455,9 +462,8 @@ static void	get_pinger_hosts(icmpitem_t **icmp_items, int *icmp_items_alloc, int
 	}
 
 	DCconfig_clean_items(items, NULL, num);
-
+	zbx_free(items);
 	zbx_preprocessor_flush();
-
 	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%d", __function_name, *icmp_items_count);
 }
 
@@ -540,7 +546,8 @@ static void	process_pinger_hosts(icmpitem_t *items, int items_count)
 		if (i == items_count - 1 || items[i].count != items[i + 1].count || items[i].interval != items[i + 1].interval ||
 				items[i].size != items[i + 1].size || items[i].timeout != items[i + 1].timeout)
 		{
-			zbx_setproctitle("%s #%d [pinging hosts]", get_process_type_string(process_type), process_num);
+			//that useless as most of the time process status is "pinging hosts"
+			//zbx_setproctitle("%s #%d [pinging hosts]", get_process_type_string(process_type), process_num);
 
 			zbx_timespec(&ts);
 

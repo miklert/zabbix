@@ -331,7 +331,7 @@ class CMacrosResolver extends CMacrosResolverGeneral {
 
 		$types = [
 			'macros_n' => [
-				'host' => ['{HOSTNAME}', '{HOST.HOST}', '{HOST.NAME}', '{HOST.DESCRIPTION1}'],
+				'host' => ['{HOSTNAME}', '{HOST.HOST}', '{HOST.NAME}'],
 				'interface' => ['{IPADDRESS}', '{HOST.IP}', '{HOST.DNS}', '{HOST.CONN}', '{HOST.PORT}'],
 				'item' => ['{ITEM.LASTVALUE}', '{ITEM.VALUE}']
 			],

@@ -1716,7 +1716,11 @@ void	zbx_export_events(void)
 		zbx_hashset_clear(&hosts);
 		zbx_vector_uint64_clear(&hostids);
 
-		zbx_problems_export_write(json.buffer, json.buffer_size);
+		if (SUCCEED == zbx_is_export_enabled())
+			zbx_problems_export_write(json.buffer, json.buffer_size);
+
+		zbx_register_problem(events[i].eventid, json.buffer);
+
 	}
 
 	zbx_hashset_iter_reset(&event_recovery, &iter);
@@ -1734,8 +1738,10 @@ void	zbx_export_events(void)
 		zbx_json_addint64(&json, ZBX_PROTO_TAG_VALUE, event->value);
 		zbx_json_adduint64(&json, ZBX_PROTO_TAG_EVENTID, event->eventid);
 		zbx_json_adduint64(&json, ZBX_PROTO_TAG_PROBLEM_EVENTID, recovery->eventid);
-
-		zbx_problems_export_write(json.buffer, json.buffer_size);
+		
+		if (SUCCEED == zbx_is_export_enabled())
+			zbx_problems_export_write(json.buffer, json.buffer_size);
+		zbx_register_problem_recovery(recovery->eventid);
 	}
 
 	zbx_problems_export_flush();
@@ -2563,8 +2569,11 @@ int	zbx_close_problem(zbx_uint64_t triggerid, zbx_uint64_t eventid, zbx_uint64_t
 		DCconfig_triggers_apply_changes(&trigger_diff);
 		DBupdate_itservices(&trigger_diff);
 
-		if (SUCCEED == zbx_is_export_enabled())
-			zbx_export_events();
+		//export is used to keep problems hash in memory, but data is flushed to dissk only if export is enabled
+		//inside zbx_export_events() 
+		
+		//if (SUCCEED == zbx_is_export_enabled())
+		zbx_export_events();
 
 		zbx_clean_events();
 		zbx_vector_ptr_clear_ext(&trigger_diff, (zbx_clean_func_t)zbx_trigger_diff_free);

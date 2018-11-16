@@ -40,6 +40,10 @@ extern int		server_num, process_num, CONFIG_PREPROCESSOR_FORKS;
 #define ZBX_PREPROC_PRIORITY_NONE	0
 #define ZBX_PREPROC_PRIORITY_FIRST	1
 
+//this must be big enough to hold buffer for occasional slowdownds, so 10-15 threads might submit data without stucking
+#define ZBX_PREPROCESSING_MAX_QUEUE_TRESHOLD 1000000
+
+
 typedef enum
 {
 	REQUEST_STATE_QUEUED		= 0,		/* requires preprocessing */
@@ -1003,7 +1007,8 @@ static void	preprocessor_destroy_manager(zbx_preprocessing_manager_t *manager)
 
 ZBX_THREAD_ENTRY(preprocessing_manager_thread, args)
 {
-	zbx_ipc_service_t		service;
+	zbx_ipc_service_t	service_requests;
+	zbx_ipc_service_t	service_results;
 	char				*error = NULL;
 	zbx_ipc_client_t		*client;
 	zbx_ipc_message_t		*message;
@@ -1023,7 +1028,14 @@ ZBX_THREAD_ENTRY(preprocessing_manager_thread, args)
 	zabbix_log(LOG_LEVEL_INFORMATION, "%s #%d started [%s #%d]", get_program_type_string(program_type),
 			server_num, get_process_type_string(process_type), process_num);
 
-	if (FAIL == zbx_ipc_service_start(&service, ZBX_IPC_SERVICE_PREPROCESSING, &error))
+	if (FAIL == zbx_ipc_service_start(&service_requests, ZBX_IPC_SERVICE_PREPROCESSING, &error))
+	{
+		zabbix_log(LOG_LEVEL_CRIT, "cannot start preprocessing service for requests: %s", error);
+		zbx_free(error);
+		exit(EXIT_FAILURE);
+	}
+
+	if (FAIL == zbx_ipc_service_start(&service_results, ZBX_IPC_SERVICE_PREPROCESSING_WORKER, &error))
 	{
 		zabbix_log(LOG_LEVEL_CRIT, "cannot start preprocessing service: %s", error);
 		zbx_free(error);
@@ -1057,7 +1069,22 @@ ZBX_THREAD_ENTRY(preprocessing_manager_thread, args)
 		}
 
 		update_selfmon_counter(ZBX_PROCESS_STATE_IDLE);
-		ret = zbx_ipc_service_recv(&service, ZBX_PREPROCESSING_MANAGER_DELAY, &client, &message);
+
+		if (manager.queued_num > ZBX_PREPROCESSING_MAX_QUEUE_TRESHOLD )
+		{
+			ret = zbx_ipc_service_recv(&service_results,0, &client, &message);
+			preprocessor_assign_tasks(&manager);
+			preprocessing_flush_queue(&manager);
+		 } else
+		{
+			ret = zbx_ipc_service_recv(&service_results, 0, &client, &message);
+			if (NULL == message)
+				ret = zbx_ipc_service_recv(&service_requests, 0, &client, &message);
+			/* CPU burn prevention */
+			if (NULL == message)	
+					usleep(1000);			
+		}
+
 		update_selfmon_counter(ZBX_PROCESS_STATE_BUSY);
 		sec = zbx_time();
 		zbx_update_env(sec);
@@ -1100,7 +1127,8 @@ ZBX_THREAD_ENTRY(preprocessing_manager_thread, args)
 		}
 	}
 
-	zbx_ipc_service_close(&service);
+	zbx_ipc_service_close(&service_requests);
+	zbx_ipc_service_close(&service_results);
 	preprocessor_destroy_manager(&manager);
 
 	return 0;

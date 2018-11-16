@@ -1,683 +1,6 @@
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/frontends/php/app/views/monitoring.widget.problems.view.php xe-rabbix/frontends/php/app/views/monitoring.widget.problems.view.php
---- zabbix-4.0.1rc1/frontends/php/app/views/monitoring.widget.problems.view.php	2018-10-22 13:32:49.000000000 +0500
-+++ xe-rabbix/frontends/php/app/views/monitoring.widget.problems.view.php	2018-10-25 22:53:33.341869349 +0500
-@@ -50,7 +50,7 @@
- 	->setHeader(array_merge($header, [
- 		$show_recovery_data ? _('Recovery time') : null,
- 		$show_recovery_data ? _('Status') : null,
--		_('Info'),
-+//		_('Info'),
- 		($data['sortfield'] === 'host') ? [_('Host'), $sort_div] : _('Host'),
- 		[
- 			($data['sortfield'] === 'name') ? [_('Problem'), $sort_div] : _('Problem'),
-@@ -148,6 +148,18 @@
- 		$info_icons[] = makeSuppressedProblemIcon($problem['suppression_data']);
- 	}
- 
-+
-+//	$description = (new CCol([$problem['name']
-+//		
-+//		(new CLinkAction($problem['name']))
-+//			->setHint(
-+//				make_popup_eventlist($trigger, $eventid, $backurl, $data['fullscreen'], $show_timeline, $sortorder),
-+//				'',
-+//				true
-+//			)
-+// 	]));
-+
-+
- 	$description = (new CCol([
- 		(new CLinkAction($problem['name']))
- 			->setHint(
-@@ -212,7 +224,7 @@
- 	$table->addRow(array_merge($row, [
- 		$show_recovery_data ? $cell_r_clock : null,
- 		$show_recovery_data ? $cell_status : null,
--		makeInformationList($info_icons),
-+//		makeInformationList($info_icons),
- 		$triggers_hosts[$trigger['triggerid']],
- 		$description,
- 		(new CCol(zbx_date2age($problem['clock'], ($problem['r_eventid'] != 0) ? $problem['r_clock'] : 0)))
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/frontends/php/include/classes/api/managers/CHistoryManager.php xe-rabbix/frontends/php/include/classes/api/managers/CHistoryManager.php
---- zabbix-4.0.1rc1/frontends/php/include/classes/api/managers/CHistoryManager.php	2018-10-22 13:32:58.000000000 +0500
-+++ xe-rabbix/frontends/php/include/classes/api/managers/CHistoryManager.php	2018-10-25 22:51:04.724614784 +0500
-@@ -34,10 +34,15 @@
- 	 * @return array    an array with items IDs as keys and arrays of history objects as values
- 	 */
- 	public function getLastValues(array $items, $limit = 1, $period = null) {
-+
- 		$results = [];
- 		$grouped_items = self::getItemsGroupedByStorage($items);
- 
--		if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
-+		if (array_key_exists(ZBX_HISTORY_SOURCE_CLICKHOUSE, $grouped_items)) {
-+			$results += $this->getLastValuesFromClickHouse($grouped_items[ZBX_HISTORY_SOURCE_CLICKHOUSE], $limit,
-+					$period
-+			);
-+		} else if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
- 			$results += $this->getLastValuesFromElasticsearch($grouped_items[ZBX_HISTORY_SOURCE_ELASTIC], $limit,
- 					$period
- 			);
-@@ -55,6 +60,157 @@
- 	 *
- 	 * @see CHistoryManager::getLastValues
- 	 */
-+
-+	/**
-+	 * Clickhouse implementation of getLastValues.
-+	 *
-+	 */
-+
-+
-+private function getLastValuesFromClickhouse($items, $limit, $period) {
-+
-+	global $HISTORY;
-+	$results = [];
-+	$itemslist='';
-+
-+	
-+	foreach ($items as $item) {
-+	    if (strlen($itemslist)>0) {
-+	        $itemslist.=','.$item['itemid'];
-+    	    } else {
-+	        $itemslist.=$item['itemid'];
-+		}
-+	} 
-+
-+
-+	$query_text='SELECT itemid, anyLast(toInt32(clock)) as clk,anyLast(ns),anyLast(value),anyLast(value_dbl),anyLast(value_str)'.
-+	' FROM '.$HISTORY['tablename'].' h'.
-+	' WHERE h.itemid in ( '.$itemslist.')'.
-+	($period ? ' AND h.clock>'.(time() - $period) : '').
-+	' GROUP BY itemid';
-+
-+        $values = CClickHouseHelper::query($query_text,1,array('itemid','clock','ns','value','value_dbl','value_str'));
-+
-+	foreach ($values as $res) 
-+	{
-+		$itemid=$res['itemid'];
-+
-+		//i know this is shit code, but it works much better then 
-+		//checking for item type for some reason (see it celow)
-+		$res['value']=floatval($res['value_dbl'])+intval($res['value']);		
-+		if (strlen($res['value_str']>0)) $res['value']=$res['value_str'];
-+
-+		if (empty($results[$itemid])) 
-+		    {
-+			$results[$itemid]=[$res];
-+		    }
-+	}
-+
-+//	foreach ($items as $item) {
-+//	    if ( !empty($results[$item['itemid']])) {
-+//	    	if ($item['value_type'] ==  ITEM_VALUE_TYPE_FLOAT && !empty($results[$item['itemid']]['value_dbl'])) {
-+//		    $results[$item['itemid']]['value']=$results[$item['itemid']]['value_dbl'];
-+//	        }
-+//		if ($item['value_type'] ==  ITEM_VALUE_TYPE_STR) {
-+//		    $results[$item['itemid']]['value']=$results[$item['itemid']]['value_str'];
-+//		}
-+//	    }
-+//	    
-+//	}
-+
-+	return $results;
-+
-+//	foreach ($items as $item) {
-+//	    if ($item['value_type'] ==  ITEM_VALUE_TYPE_FLOAT) {
-+//    		if (strlen($float_itemslist)>0) {
-+//		        $float_itemslist.=','.$item['itemid'];
-+//    		} else {
-+//		    $float_itemslist.=$item['itemid'];
-+//		}
-+//	    } else if ($item['value_type'] ==  ITEM_VALUE_TYPE_UINT64) {
-+//		if (strlen($uint_itemslist)>0) {
-+//		        $uint_itemslist.=','.$item['itemid'];
-+//    		} else {
-+//		    $uint_itemslist.=$item['itemid'];
-+//		}
-+//	    } else {
-+//		if (strlen($str_itemslist)>0) {
-+//		        $str_itemslist.=','.$item['itemid'];
-+//    		} else {
-+//		    $str_itemslist.=$item['itemid'];
-+//		}
-+//	    }
-+//	}
-+
-+//	var_dump($itemslist);
-+	
-+//	$query_text='SELECT itemid, toInt32(clock) as clk,ns,value,value_dbl,value_str as value'.
-+//	' FROM '.$HISTORY['tablename'].' h'.
-+//	' WHERE h.itemid in ( '.$itemslist.')'.
-+//	($period ? ' AND h.clock>'.(time() - $period) : '').
-+//	' ORDER BY clk DESC';
-+
-+
-+//	$query_text.=' UNION ALL SELECT itemid, toInt32(clock) as clk,ns,value as value'.
-+//	' FROM '.$HISTORY['tablename'].' h'.
-+//	' WHERE h.itemid in ( '.$uint_itemslist.')'.
-+//	($period ? ' AND h.clock>'.(time() - $period) : '').
-+//	' ORDER BY clk DESC';
-+//
-+//	$query_text.=' UNION ALL SELECT itemid, toInt32(clock) as clk,ns,value_str as value'.
-+//	' FROM '.$HISTORY['tablename'].' h'.
-+//	' WHERE h.itemid in ( '.$str_itemslist.')'.
-+//	($period ? ' AND h.clock>'.(time() - $period) : '').
-+//	' ORDER BY clk DESC';
-+
-+//	var_dump($query_text);
-+    
-+//        $values = CClickHouseHelper::query($query_text,1,array('itemid','clock','ns','value','value_dbl','value_str'));
-+
-+//var_dump($values);
-+
-+/*
-+	foreach ($items as $item) {
-+	    if ($item['value_type'] ==  ITEM_VALUE_TYPE_FLOAT) {
-+		$query_text=	'SELECT itemid, toInt32(clock),ns,value_dbl'.
-+		    ' FROM '.$HISTORY['tablename'].' h'.
-+		    ' WHERE h.itemid= '.$item['itemid'].
-+		    ($period ? ' AND h.clock>'.(time() - $period) : '').
-+		    ' ORDER BY h.clock DESC';
-+	    }
-+
-+	    if ($item['value_type'] ==  ITEM_VALUE_TYPE_UINT64) {
-+		$query_text=	'SELECT itemid, toInt32(clock) as clock,ns,value'.
-+		    ' FROM '.$HISTORY['tablename'].' h'.
-+		    ' WHERE h.itemid= '.$item['itemid']. 
-+		    ($period ? ' AND h.clock>'.(time() - $period) : '').
-+		    ' ORDER BY h.clock DESC';
-+	    }
-+
-+	    if ($item['value_type'] ==  ITEM_VALUE_TYPE_STR || $item['value_type'] ==  ITEM_VALUE_TYPE_TEXT ) {
-+		$query_text=	'SELECT itemid, toInt32(clock) as clock,ns,value_str'.
-+		    ' FROM '.$HISTORY['tablename'].' h'.
-+		    ' WHERE h.itemid= '.$item['itemid']. 
-+		    ($period ? ' AND h.clock>'.(time() - $period) : '').
-+		    ' ORDER BY h.clock DESC';
-+	    }
-+
-+	    if ($limit > 0) $query_text.=" LIMIT $limit";
-+	    
-+	    $values = CClickHouseHelper::query($query_text,1,array('itemid','clock','ns','value'));
-+
-+//	    var_dump($values);
-+	    if ($values) {
-+		$results[$item['itemid']] = $values;
-+	    } else {
-+//			    error("Got empty array, ommiting the result");
-+	    }
-+	}
-+
-+	return $results;
-+*/
-+    }
-+
- 	private function getLastValuesFromElasticsearch($items, $limit, $period) {
- 		$terms = [];
- 		$results = [];
-@@ -137,6 +293,7 @@
- 	 *
- 	 * @see CHistoryManager::getLastValues
- 	 */
-+
- 	private function getLastValuesFromSql($items, $limit, $period) {
- 		$results = [];
- 
-@@ -171,6 +328,7 @@
- 	 * @return array    history value aggregation for graphs
- 	 */
- 	public function getGraphAggregation(array $items, $time_from, $time_to, $width = null) {
-+//		error("Hello wold");
- 		if ($width !== null) {
- 			$size = $time_to - $time_from;
- 			$delta = $size - $time_from % $size;
-@@ -183,7 +341,13 @@
- 		$grouped_items = self::getItemsGroupedByStorage($items);
- 
- 		$results = [];
--		if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
-+
-+
-+		if (array_key_exists(ZBX_HISTORY_SOURCE_CLICKHOUSE, $grouped_items)) {
-+			$results += $this->getGraphAggregationFromClickhouse($grouped_items[ZBX_HISTORY_SOURCE_CLICKHOUSE],
-+					$time_from, $time_to, $width, $size, $delta
-+			);
-+		} else if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
- 			$results += $this->getGraphAggregationFromElasticsearch($grouped_items[ZBX_HISTORY_SOURCE_ELASTIC],
- 					$time_from, $time_to, $width, $size, $delta
- 			);
-@@ -203,6 +367,57 @@
- 	 *
- 	 * @see CHistoryManager::getGraphAggregation
- 	 */
-+	private function getGraphAggregationFromClickhouse(array $items, $time_from, $time_to, $width, $size, $delta) {
-+
-+		global $HISTORY;
-+		$group_by = 'itemid';
-+		$sql_select_extra = '';
-+
-+		if ($width !== null && $size !== null && $delta !== null) {
-+			// Required for 'group by' support of Oracle.
-+			$calc_field = 'round('.$width.'*'.'modulo(toUInt32(clock)'.'+'.$delta.",$size)".'/('.$size.'),0)';
-+
-+			$sql_select_extra = ','.$calc_field.' AS i';
-+			$group_by .= ','.$calc_field;
-+		}
-+
-+		$results = [];
-+
-+		foreach ($items as $item) {
-+			if ($item['value_type'] == ITEM_VALUE_TYPE_UINT64) {
-+				$sql_select = 'COUNT(*) AS count,AVG(value) AS avg,MIN(value) AS min,MAX(value) AS max';
-+			} else
-+			{
-+				$sql_select = 'COUNT(*) AS count,AVG(value_dbl) AS avg,MIN(value_dbl) AS min,MAX(value_dbl) AS max';
-+			}
-+
-+			$query_text = 
-+				'SELECT itemid,'.$sql_select.$sql_select_extra.',MAX(toUInt32(clock)) AS clock1'.
-+				' FROM '. $HISTORY['tablename'] .
-+				' WHERE itemid='.$item['itemid'].
-+					' AND toUInt32(clock)>='.$time_from.
-+					' AND toUInt32(clock)<='.$time_to.
-+				' GROUP BY '.$group_by ;
-+			
-+//			file_put_contents('/var/log/nginx/chartlog.log', "Will do query '$query_text' \n",FILE_APPEND);
-+
-+			$values = CClickHouseHelper::query($query_text,1,array('itemid','count','avg','min','max','i','clock'));
-+
-+			$results[$item['itemid']]['source'] = 'history';
-+			$results[$item['itemid']]['data'] = $values;
-+		}
-+
-+//	    ob_start();
-+//	    var_dump($results);
-+//	    $dresult = ob_get_clean();
-+//	    error("Dump of the result is '$dresult'");
-+
-+//	    file_put_contents('/var/log/nginx/chartlog.log', "Clickhouse Results structure is $dresult' \n",FILE_APPEND);
-+
-+		return $results;
-+
-+	}
-+
- 	private function getGraphAggregationFromElasticsearch(array $items, $time_from, $time_to, $width, $size, $delta) {
- 		$terms = [];
- 
-@@ -423,6 +638,8 @@
- 	 */
- 	public function getAggregatedValue(array $item, $aggregation, $time_from) {
- 		switch (self::getDataSourceType($item['value_type'])) {
-+			case ZBX_HISTORY_SOURCE_CLICKHOUSE:
-+				return $this->getAggregatedValueFromClickhouse($item, $aggregation, $time_from);
- 			case ZBX_HISTORY_SOURCE_ELASTIC:
- 				return $this->getAggregatedValueFromElasticsearch($item, $aggregation, $time_from);
- 
-@@ -431,6 +648,24 @@
- 		}
- 	}
- 
-+	private function getAggregatedValueFromClickhouse(array $item, $aggregation, $time_from) {
-+
-+		global $HISTORY;
-+		$query_text =
-+			'SELECT '.$aggregation.'(value) AS value'.
-+			' FROM '. $HISTORY['tablename'].
-+			' WHERE clock>toDateTime('.$time_from.')'.
-+			' AND itemid='.$item['itemid'].
-+			' HAVING COUNT(*)>0';
-+		
-+
-+		$value = CClickHouseHelper::query($query_text,0,array());
-+
-+		return $value;
-+
-+	}
-+
-+
- 	/**
- 	 * Elasticsearch specific implementation of getAggregatedValue.
- 	 *
-@@ -623,8 +858,12 @@
- 			global $HISTORY;
- 
- 			if (is_array($HISTORY) && array_key_exists('types', $HISTORY) && is_array($HISTORY['types'])) {
--				$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
--						? ZBX_HISTORY_SOURCE_ELASTIC : ZBX_HISTORY_SOURCE_SQL;
-+					if ($HISTORY['storagetype']=='clickhouse') 
-+							$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
-+								? ZBX_HISTORY_SOURCE_CLICKHOUSE : ZBX_HISTORY_SOURCE_SQL;
-+					else 
-+							$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
-+								? ZBX_HISTORY_SOURCE_ELASTIC : ZBX_HISTORY_SOURCE_SQL;
- 			}
- 			else {
- 				// SQL is a fallback data source.
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/frontends/php/include/classes/api/services/CHistory.php xe-rabbix/frontends/php/include/classes/api/services/CHistory.php
---- zabbix-4.0.1rc1/frontends/php/include/classes/api/services/CHistory.php	2018-10-22 13:32:58.000000000 +0500
-+++ xe-rabbix/frontends/php/include/classes/api/services/CHistory.php	2018-10-25 22:51:04.760614118 +0500
-@@ -112,7 +112,10 @@
- 		switch (CHistoryManager::getDataSourceType($options['history'])) {
- 			case ZBX_HISTORY_SOURCE_ELASTIC:
- 				return $this->getFromElasticsearch($options);
--
-+				break;
-+			case ZBX_HISTORY_SOURCE_CLICKHOUSE:
-+				return $this->getFromClickHouse($options);
-+				break;
- 			default:
- 				return $this->getFromSql($options);
- 		}
-@@ -239,6 +242,129 @@
- 	}
- 
- 	/**
-+	 * Clickhouse specific implementation of get.
-+	 *
-+	 * @see CHistory::get
-+	 */
-+	private function getFromClickHouse($options) {
-+		global $HISTORY;
-+		$result = [];
-+		$sql_parts = [
-+			'select'	=> ['history' => 'h.itemid'],
-+			'from'		=> [],
-+			'where'		=> [],
-+			'group'		=> [],
-+			'order'		=> [],
-+			'limit'		=> null
-+		];
-+
-+
-+		$value_col='value';
-+
-+		if ($options['history']==ITEM_VALUE_TYPE_FLOAT) {
-+		    $value_col='value_dbl';
-+		}
-+
-+		if ($options['history']==ITEM_VALUE_TYPE_STR) {
-+		    $value_col='value_str';
-+		}
-+
-+
-+		$table_name = $HISTORY['tablename'];
-+
-+		$sql_parts['from']['history'] = $table_name.' h';
-+
-+		// itemids
-+		if ($options['itemids'] !== null) {
-+			$sql_parts['where']['itemid'] = "h.itemid =". $options['itemids'][0];
-+		}
-+
-+		// time_from
-+		if ($options['time_from'] !== null) {
-+			$sql_parts['where']['clock_from'] = 'h.clock>='.zbx_dbstr($options['time_from']);
-+		}
-+
-+		// time_till
-+		if ($options['time_till'] !== null) {
-+			$sql_parts['where']['clock_till'] = 'h.clock<='.zbx_dbstr($options['time_till']);
-+		}
-+
-+		// filter
-+		if (is_array($options['filter'])) {
-+			$this->dbFilter($sql_parts['from']['history'], $options, $sql_parts);
-+		}
-+
-+		// search
-+		if (is_array($options['search'])) {
-+			zbx_db_search($sql_parts['from']['history'], $options, $sql_parts);
-+		}
-+
-+		// output
-+		if ($options['output'] == API_OUTPUT_EXTEND) {
-+			unset($sql_parts['select']['clock']);
-+			$sql_parts['select']['history'] = 'h.*';
-+		}
-+
-+		// countOutput
-+		if ($options['countOutput']) {
-+			$options['sortfield'] = '';
-+			$sql_parts['select'] = ['count(DISTINCT h.hostid) as rowscount'];
-+
-+			// groupCount
-+			if ($options['groupCount']) {
-+				foreach ($sql_parts['group'] as $key => $fields) {
-+					$sql_parts['select'][$key] = $fields;
-+				}
-+			}
-+		}
-+
-+		// sorting
-+		$sql_parts = $this->applyQuerySortOptions($table_name, $this->tableAlias(), $options, $sql_parts);
-+
-+		// limit
-+		if (zbx_ctype_digit($options['limit']) && $options['limit']) {
-+			$sql_parts['limit'] = $options['limit'];
-+		}
-+
-+		$sql_parts['select'] = array_unique($sql_parts['select']);
-+		$sql_parts['from'] = array_unique($sql_parts['from']);
-+		$sql_parts['where'] = array_unique($sql_parts['where']);
-+		$sql_parts['order'] = array_unique($sql_parts['order']);
-+
-+		$sql_select = '';
-+		$sql_from = '';
-+		$sql_order = '';
-+
-+		if ($sql_parts['select']) {
-+			$sql_select .= implode(',', $sql_parts['select']);
-+		}
-+
-+		if ($sql_parts['from']) {
-+			$sql_from .= implode(',', $sql_parts['from']);
-+		}
-+
-+		$sql_where = $sql_parts['where'] ? ' WHERE '.implode(' AND ', $sql_parts['where']) : '';
-+
-+		if ($sql_parts['order']) {
-+			$sql_order .= ' ORDER BY '.implode(',', $sql_parts['order']);
-+		}
-+
-+		$sql_limit = $sql_parts['limit'];
-+		$sql = "SELECT itemid, toInt32(clock), ns, $value_col".
-+				' FROM '.$sql_from.
-+				$sql_where.
-+				$sql_order;
-+
-+		var_dump($sql);
-+		$values = CClickHouseHelper::query($sql,1,array('itemid','clock','ns', 'value'));
-+
-+
-+//		error("Will exec sql $sql");
-+
-+		return $values;
-+	}
-+
-+	/**
- 	 * Elasticsearch specific implementation of get.
- 	 *
- 	 * @see CHistory::get
-@@ -315,4 +441,5 @@
- 
- 		return null;
- 	}
-+
- }
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/frontends/php/include/classes/helpers/CClickHouseHelper.php xe-rabbix/frontends/php/include/classes/helpers/CClickHouseHelper.php
---- zabbix-4.0.1rc1/frontends/php/include/classes/helpers/CClickHouseHelper.php	1970-01-01 05:00:00.000000000 +0500
-+++ xe-rabbix/frontends/php/include/classes/helpers/CClickHouseHelper.php	2018-10-25 22:51:04.760614118 +0500
-@@ -0,0 +1,99 @@
-+<?php
-+
-+/*
-+ * A helper class for working with ClickHouse database
-+ */
-+class CClickHouseHelper {
-+
-+	/**
-+	 * Perform request(s) to Elasticsearch and parse the results.
-+	 *
-+	 * @param string $method      HTTP method to be used to perform request
-+	 * @param string $endpoint    requested url
-+	 * @param mixed  $request     data to be sent
-+	 *
-+	 * @return array    parsed result
-+	 */
-+	public static function query($request,$is_table_result,$columns) {
-+		
-+		global $HISTORY;
-+//		error("CClikHouseHelper.query($request) ");
-+		$ch = curl_init();
-+
-+		curl_setopt($ch, CURLOPT_URL,$HISTORY['url']['uint']);
-+		curl_setopt($ch, CURLOPT_POST, 1);
-+		curl_setopt($ch, CURLOPT_POSTFIELDS,$request);
-+
-+		// receive server response ...
-+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-+
-+		$server_output = curl_exec ($ch);
-+		curl_close ($ch);
-+
-+//		error("Clickhouse returned '$server_output'");
-+
-+//		ob_start();
-+//    		var_dump($request);
-+//    		var_dump($server_output);
-+
-+//		$dresult = ob_get_clean();
-+//	    error("Dump of the result is '$dresult'");
-+
-+//		file_put_contents('/var/log/nginx/clickhouse.log', "Clickhouse Results structure is $dresult' \n",FILE_APPEND);
-+
-+
-+
-+		return self::parseResult($server_output,$is_table_result,$columns);
-+		
-+	}
-+
-+	/**
-+	 * Parse result and return two dimentional array of the result
-+	 *
-+	 * @param string $data        result as a string
-+	 *
-+	 * @return array    parsed result  two dimentional array of the result
-+	 */
-+	private static function parseResult($data,$is_table_result,$columns) {
-+
-+	    //to make processing simpler, lets distinguish results of two types - table (two dimensional array as result
-+	    //returned or SINGLE, when one value (a number, probably) 
-+	    if ($is_table_result) 
-+	    {
-+		$result=[];
-+
-+		$lines = explode("\n", $data);
-+		$curline=0;
-+
-+		foreach ($lines as $line) {
-+		    if (strlen(str_replace("\n",'',$line) ) > 0) 
-+		    { 
-+//			error("Processing line '$line'");
-+//			error("Columns count is ".count($columns)." field count is ".count(explode("\t",$line)));
-+			$result[$curline]=array_combine($columns,explode("\t",$line));
-+			$curline++;
-+
-+		    } else {
-+//			error("Got empty line, skipping");
-+		    }
-+		}
-+
-+	    } else
-+	    {
-+		//single result is here, stripping tabs,spaces and newlines
-+		$result=str_replace(array("\r", "\n","\t"), '', $data);
-+	    }
-+
-+/*	    ob_start();
-+	    var_dump($result);
-+	    $dresult = ob_get_clean();
-+	    error("Dump of the result is '$dresult'");
-+*/
-+	    return $result;
-+	}
-+
-+
-+}
-+
-+
-+
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/frontends/php/include/classes/macros/CMacrosResolverGeneral.php xe-rabbix/frontends/php/include/classes/macros/CMacrosResolverGeneral.php
---- zabbix-4.0.1rc1/frontends/php/include/classes/macros/CMacrosResolverGeneral.php	2018-10-22 13:32:57.000000000 +0500
-+++ xe-rabbix/frontends/php/include/classes/macros/CMacrosResolverGeneral.php	2018-10-25 22:51:04.772613897 +0500
-@@ -772,7 +772,7 @@
- 		}
- 
- 		$result = DBselect(
--			'SELECT f.triggerid,f.functionid,h.hostid,h.host,h.name'.
-+			'SELECT f.triggerid,f.functionid,h.hostid,h.host,h.name,h.description'.
- 			' FROM functions f'.
- 				' JOIN items i ON f.itemid=i.itemid'.
- 				' JOIN hosts h ON i.hostid=h.hostid'.
-@@ -781,6 +781,7 @@
- 
- 		while ($row = DBfetch($result)) {
- 			foreach ($macros[$row['functionid']] as $macro => $tokens) {
-+				//var_dump($row);
- 				switch ($macro) {
- 					case 'HOST.ID':
- 						$value = $row['hostid'];
-@@ -794,6 +795,10 @@
- 					case 'HOST.NAME':
- 						$value = $row['name'];
- 						break;
-+					case 'HOST.DESCRIPTION1':
-+						$value = $row['description'];
-+						break;
-+
- 				}
- 
- 				foreach ($tokens as $token) {
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/frontends/php/include/classes/macros/CMacrosResolver.php xe-rabbix/frontends/php/include/classes/macros/CMacrosResolver.php
---- zabbix-4.0.1rc1/frontends/php/include/classes/macros/CMacrosResolver.php	2018-10-22 13:32:57.000000000 +0500
-+++ xe-rabbix/frontends/php/include/classes/macros/CMacrosResolver.php	2018-10-25 22:51:04.780613749 +0500
-@@ -331,7 +331,7 @@
- 
- 		$types = [
- 			'macros_n' => [
--				'host' => ['{HOSTNAME}', '{HOST.HOST}', '{HOST.NAME}'],
-+				'host' => ['{HOSTNAME}', '{HOST.HOST}', '{HOST.NAME}', '{HOST.DESCRIPTION1}'],
- 				'interface' => ['{IPADDRESS}', '{HOST.IP}', '{HOST.DNS}', '{HOST.CONN}', '{HOST.PORT}'],
- 				'item' => ['{ITEM.LASTVALUE}', '{ITEM.VALUE}']
- 			],
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/frontends/php/include/defines.inc.php xe-rabbix/frontends/php/include/defines.inc.php
---- zabbix-4.0.1rc1/frontends/php/include/defines.inc.php	2018-10-22 13:32:49.000000000 +0500
-+++ xe-rabbix/frontends/php/include/defines.inc.php	2018-10-25 22:51:04.788613601 +0500
-@@ -50,8 +50,10 @@
- 
- // the maximum period to display history data for the latest data and item overview pages in seconds
- // by default set to 86400 seconds (24 hours)
--define('ZBX_HISTORY_PERIOD', 86400);
-+define('ZBX_HISTORY_PERIOD', 7200);
- 
-+
-+define('ZBX_HISTORY_SOURCE_CLICKHOUSE',	'clickhouse');
- define('ZBX_HISTORY_SOURCE_ELASTIC',	'elastic');
- define('ZBX_HISTORY_SOURCE_SQL',		'sql');
- 
-@@ -59,7 +61,7 @@
- define('ELASTICSEARCH_RESPONSE_AGGREGATION',	1);
- define('ELASTICSEARCH_RESPONSE_DOCUMENTS',		2);
- 
--define('ZBX_WIDGET_ROWS', 20);
-+define('ZBX_WIDGET_ROWS', 2000);
- 
- define('ZBX_FONTPATH',				realpath('fonts')); // where to search for font (GD > 2.0.18)
- define('ZBX_GRAPH_FONT_NAME',		'DejaVuSans'); // font file name
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/include/common.h xe-rabbix/include/common.h
---- zabbix-4.0.1rc1/include/common.h	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/include/common.h	2018-10-25 22:54:06.105264055 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/include/common.h zabbix-4.0.1.fixed/include/common.h
+--- zabbix-4.0.1rc2/include/common.h	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/include/common.h	2018-11-16 12:51:04.840205415 +0500
 @@ -87,6 +87,7 @@
  #define	AGENT_ERROR	-5
  #define	GATEWAY_ERROR	-6
@@ -697,9 +20,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  #define ZBX_PROCESS_TYPE_UNKNOWN	255
  const char	*get_process_type_string(unsigned char process_type);
  int		get_process_type_by_name(const char *proc_type_str);
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/include/dbcache.h xe-rabbix/include/dbcache.h
---- zabbix-4.0.1rc1/include/dbcache.h	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/include/dbcache.h	2018-10-25 22:54:06.141263389 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/include/dbcache.h zabbix-4.0.1.fixed/include/dbcache.h
+--- zabbix-4.0.1rc2/include/dbcache.h	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/include/dbcache.h	2018-11-16 12:51:04.852205191 +0500
 @@ -34,12 +34,17 @@
  #define	ZBX_POLLER_TYPE_IPMI		2
  #define	ZBX_POLLER_TYPE_PINGER		3
@@ -720,9 +43,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  #define ZBX_TRIGGER_DEPENDENCY_LEVELS_MAX	32
  
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/include/zbxjson.h xe-rabbix/include/zbxjson.h
---- zabbix-4.0.1rc1/include/zbxjson.h	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/include/zbxjson.h	2018-10-25 22:54:06.145263316 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/include/zbxjson.h zabbix-4.0.1.fixed/include/zbxjson.h
+--- zabbix-4.0.1rc2/include/zbxjson.h	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/include/zbxjson.h	2018-11-16 12:51:04.852205191 +0500
 @@ -117,6 +117,7 @@
  #define ZBX_PROTO_VALUE_JAVA_GATEWAY_JMX	"java gateway jmx"
  #define ZBX_PROTO_VALUE_GET_QUEUE		"queue.get"
@@ -739,9 +62,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  struct zbx_json
  {
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxcommon/str.c xe-rabbix/src/libs/zbxcommon/str.c
---- zabbix-4.0.1rc1/src/libs/zbxcommon/str.c	2018-10-22 13:32:48.000000000 +0500
-+++ xe-rabbix/src/libs/zbxcommon/str.c	2018-10-25 22:54:06.153263168 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxcommon/str.c zabbix-4.0.1.fixed/src/libs/zbxcommon/str.c
+--- zabbix-4.0.1rc2/src/libs/zbxcommon/str.c	2018-10-25 13:29:13.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxcommon/str.c	2018-11-16 12:51:04.852205191 +0500
 @@ -1159,6 +1159,10 @@
  	{
  		case ZBX_PROCESS_TYPE_POLLER:
@@ -753,9 +76,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  		case ZBX_PROCESS_TYPE_UNREACHABLE:
  			return "unreachable poller";
  		case ZBX_PROCESS_TYPE_IPMIPOLLER:
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxdbcache/dbconfig.c xe-rabbix/src/libs/zbxdbcache/dbconfig.c
---- zabbix-4.0.1rc1/src/libs/zbxdbcache/dbconfig.c	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/src/libs/zbxdbcache/dbconfig.c	2018-10-25 22:54:06.173262798 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxdbcache/dbconfig.c zabbix-4.0.1.fixed/src/libs/zbxdbcache/dbconfig.c
+--- zabbix-4.0.1rc2/src/libs/zbxdbcache/dbconfig.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxdbcache/dbconfig.c	2018-11-16 12:51:04.856205116 +0500
 @@ -90,6 +90,8 @@
  
  extern unsigned char	program_type;
@@ -812,7 +135,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  		case ITEM_TYPE_IPMI:
  			if (0 == CONFIG_IPMIPOLLER_FORKS)
  				break;
-@@ -5649,6 +5676,8 @@
+@@ -5651,6 +5678,8 @@
  	CREATE_HASHSET(config->corr_conditions, 0);
  	CREATE_HASHSET(config->corr_operations, 0);
  	CREATE_HASHSET(config->hostgroups, 0);
@@ -821,7 +144,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  	zbx_vector_ptr_create_ext(&config->hostgroups_name, __config_mem_malloc_func, __config_mem_realloc_func,
  			__config_mem_free_func);
  
-@@ -7600,6 +7629,18 @@
+@@ -7602,6 +7631,18 @@
  		case ZBX_POLLER_TYPE_PINGER:
  			max_items = MAX_PINGER_ITEMS;
  			break;
@@ -840,7 +163,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  		default:
  			max_items = 1;
  	}
-@@ -7617,22 +7658,18 @@
+@@ -7619,22 +7660,18 @@
  		min = zbx_binary_heap_find_min(queue);
  		dc_item = (ZBX_DC_ITEM *)min->data;
  
@@ -873,7 +196,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  		zbx_binary_heap_remove_min(queue);
  		dc_item->location = ZBX_LOC_NOWHERE;
-@@ -7650,34 +7687,41 @@
+@@ -7652,34 +7689,41 @@
  		}
  
  		/* don't apply unreachable item/host throttling for prioritized items */
@@ -943,7 +266,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  		dc_item_prev = dc_item;
  		dc_item->location = ZBX_LOC_POLLER;
-@@ -7685,21 +7729,22 @@
+@@ -7687,21 +7731,22 @@
  		DCget_item(&items[num], dc_item);
  		num++;
  
@@ -979,7 +302,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  	UNLOCK_CACHE;
  
  	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%d", __function_name, num);
-@@ -7952,6 +7997,7 @@
+@@ -7954,6 +7999,7 @@
  				dc_requeue_item(dc_item, dc_host, states[i], ZBX_ITEM_COLLECTED, lastclocks[i]);
  				break;
  			case NETWORK_ERROR:
@@ -987,7 +310,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  			case GATEWAY_ERROR:
  			case TIMEOUT_ERROR:
  				dc_item->queue_priority = ZBX_QUEUE_PRIORITY_LOW;
-@@ -7959,11 +8005,48 @@
+@@ -7961,11 +8007,48 @@
  						time(NULL));
  				break;
  			default:
@@ -1036,7 +359,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  void	DCrequeue_items(const zbx_uint64_t *itemids, const unsigned char *states, const int *lastclocks,
  		const int *errcodes, size_t num)
  {
-@@ -7978,13 +8061,17 @@
+@@ -7980,13 +8063,17 @@
  		const int *errcodes, size_t num, unsigned char poller_type, int *nextcheck)
  {
  	WRLOCK_CACHE;
@@ -1056,7 +379,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  /******************************************************************************
   *                                                                            *
   * Function: zbx_dc_requeue_unreachable_items                                 *
-@@ -11772,3 +11859,112 @@
+@@ -11774,3 +11861,112 @@
  
  	UNLOCK_CACHE;
  }
@@ -1169,9 +492,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
 +	zbx_json_close(json);	
 +	UNLOCK_CACHE;
 +}
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxdbcache/dbconfig.h xe-rabbix/src/libs/zbxdbcache/dbconfig.h
---- zabbix-4.0.1rc1/src/libs/zbxdbcache/dbconfig.h	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/src/libs/zbxdbcache/dbconfig.h	2018-10-25 22:54:06.193262429 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxdbcache/dbconfig.h zabbix-4.0.1.fixed/src/libs/zbxdbcache/dbconfig.h
+--- zabbix-4.0.1rc2/src/libs/zbxdbcache/dbconfig.h	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxdbcache/dbconfig.h	2018-11-16 12:51:04.856205116 +0500
 @@ -760,9 +760,33 @@
  	ZBX_DC_CONFIG_TABLE	*config;
  	ZBX_DC_STATUS		*status;
@@ -1223,9 +546,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
 -
  #endif
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxhistory/history.c xe-rabbix/src/libs/zbxhistory/history.c
---- zabbix-4.0.1rc1/src/libs/zbxhistory/history.c	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/src/libs/zbxhistory/history.c	2018-10-25 22:54:06.197262354 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxhistory/history.c zabbix-4.0.1.fixed/src/libs/zbxhistory/history.c
+--- zabbix-4.0.1rc2/src/libs/zbxhistory/history.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxhistory/history.c	2018-11-16 12:51:04.856205116 +0500
 @@ -25,10 +25,11 @@
  
  #include "../zbxalgo/vectorimpl.h"
@@ -1263,9 +586,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  		if (FAIL == ret)
  			return FAIL;
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxhistory/history_clickhouse.c xe-rabbix/src/libs/zbxhistory/history_clickhouse.c
---- zabbix-4.0.1rc1/src/libs/zbxhistory/history_clickhouse.c	1970-01-01 05:00:00.000000000 +0500
-+++ xe-rabbix/src/libs/zbxhistory/history_clickhouse.c	2018-10-25 22:54:06.197262354 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxhistory/history_clickhouse.c zabbix-4.0.1.fixed/src/libs/zbxhistory/history_clickhouse.c
+--- zabbix-4.0.1rc2/src/libs/zbxhistory/history_clickhouse.c	1970-01-01 05:00:00.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxhistory/history_clickhouse.c	2018-11-16 12:51:04.856205116 +0500
 @@ -0,0 +1,796 @@
 +/*
 +** Zabbix
@@ -2063,9 +1386,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
 +}
 +
 +#endif
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxhistory/history.h xe-rabbix/src/libs/zbxhistory/history.h
---- zabbix-4.0.1rc1/src/libs/zbxhistory/history.h	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/src/libs/zbxhistory/history.h	2018-10-25 22:54:06.201262281 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxhistory/history.h zabbix-4.0.1.fixed/src/libs/zbxhistory/history.h
+--- zabbix-4.0.1rc2/src/libs/zbxhistory/history.h	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxhistory/history.h	2018-11-16 12:51:04.856205116 +0500
 @@ -49,4 +49,7 @@
  /* elastic hist */
  int	zbx_history_elastic_init(zbx_history_iface_t *hist, unsigned char value_type, char **error);
@@ -2074,9 +1397,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
 +int	zbx_history_clickhouse_init(zbx_history_iface_t *hist, unsigned char value_type, char **error);
 +
  #endif
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxhistory/Makefile.am xe-rabbix/src/libs/zbxhistory/Makefile.am
---- zabbix-4.0.1rc1/src/libs/zbxhistory/Makefile.am	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/src/libs/zbxhistory/Makefile.am	2018-10-25 22:54:06.201262281 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxhistory/Makefile.am zabbix-4.0.1.fixed/src/libs/zbxhistory/Makefile.am
+--- zabbix-4.0.1rc2/src/libs/zbxhistory/Makefile.am	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxhistory/Makefile.am	2018-11-16 12:51:04.856205116 +0500
 @@ -5,4 +5,5 @@
  libzbxhistory_a_SOURCES = \
  	history.c history.h \
@@ -2084,9 +1407,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
 -	history_elastic.c 
 +	history_elastic.c \
 +	history_clickhouse.c
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxhistory/Makefile.in xe-rabbix/src/libs/zbxhistory/Makefile.in
---- zabbix-4.0.1rc1/src/libs/zbxhistory/Makefile.in	2018-10-22 13:36:34.000000000 +0500
-+++ xe-rabbix/src/libs/zbxhistory/Makefile.in	2018-10-25 22:54:06.201262281 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxhistory/Makefile.in zabbix-4.0.1.fixed/src/libs/zbxhistory/Makefile.in
+--- zabbix-4.0.1rc2/src/libs/zbxhistory/Makefile.in	2018-10-25 13:30:23.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxhistory/Makefile.in	2018-11-16 12:51:04.856205116 +0500
 @@ -112,7 +112,7 @@
  libzbxhistory_a_AR = $(AR) $(ARFLAGS)
  libzbxhistory_a_LIBADD =
@@ -2114,9 +1437,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  .c.o:
  @am__fastdepCC_TRUE@	$(AM_V_CC)depbase=`echo $@ | sed 's|[^/]*$$|$(DEPDIR)/&|;s|\.o$$||'`;\
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxicmpping/icmpping.c xe-rabbix/src/libs/zbxicmpping/icmpping.c
---- zabbix-4.0.1rc1/src/libs/zbxicmpping/icmpping.c	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/src/libs/zbxicmpping/icmpping.c	2018-10-25 22:54:06.201262281 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxicmpping/icmpping.c zabbix-4.0.1.fixed/src/libs/zbxicmpping/icmpping.c
+--- zabbix-4.0.1rc2/src/libs/zbxicmpping/icmpping.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxicmpping/icmpping.c	2018-11-16 12:51:04.856205116 +0500
 @@ -24,10 +24,14 @@
  
  extern char	*CONFIG_SOURCE_IP;
@@ -2505,9 +1828,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  /******************************************************************************
   *                                                                            *
   * Function: do_ping                                                          *
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxself/selfmon.c xe-rabbix/src/libs/zbxself/selfmon.c
---- zabbix-4.0.1rc1/src/libs/zbxself/selfmon.c	2018-10-22 13:32:48.000000000 +0500
-+++ xe-rabbix/src/libs/zbxself/selfmon.c	2018-10-25 22:54:06.205262206 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxself/selfmon.c zabbix-4.0.1.fixed/src/libs/zbxself/selfmon.c
+--- zabbix-4.0.1rc2/src/libs/zbxself/selfmon.c	2018-10-25 13:29:13.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxself/selfmon.c	2018-11-16 12:51:04.856205116 +0500
 @@ -89,6 +89,8 @@
  extern char	*CONFIG_FILE;
  extern int	CONFIG_POLLER_FORKS;
@@ -2528,9 +1851,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  		case ZBX_PROCESS_TYPE_UNREACHABLE:
  			return CONFIG_UNREACHABLE_POLLER_FORKS;
  		case ZBX_PROCESS_TYPE_IPMIPOLLER:
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/libs/zbxserver/expression.c xe-rabbix/src/libs/zbxserver/expression.c
---- zabbix-4.0.1rc1/src/libs/zbxserver/expression.c	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/src/libs/zbxserver/expression.c	2018-10-25 22:54:06.213262059 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/libs/zbxserver/expression.c zabbix-4.0.1.fixed/src/libs/zbxserver/expression.c
+--- zabbix-4.0.1rc2/src/libs/zbxserver/expression.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/libs/zbxserver/expression.c	2018-11-16 12:51:04.856205116 +0500
 @@ -3758,6 +3758,11 @@
  					ret = DBget_trigger_value(event->trigger.expression, &replace_to, N_functionid,
  							ZBX_REQUEST_HOST_DNS);
@@ -2560,9 +1883,9 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  	zbx_hashset_iter_reset(funcs, &iter);
  	while (NULL != (func = (zbx_func_t *)zbx_hashset_iter_next(&iter)))
  	{
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' -x zabbix_server zabbix-4.0.1rc1/src/zabbix_proxy/proxy.c xe-rabbix/src/zabbix_proxy/proxy.c
---- zabbix-4.0.1rc1/src/zabbix_proxy/proxy.c	2018-10-22 13:32:47.000000000 +0500
-+++ xe-rabbix/src/zabbix_proxy/proxy.c	2018-10-25 22:54:06.221261912 +0500
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_proxy/proxy.c zabbix-4.0.1.fixed/src/zabbix_proxy/proxy.c
+--- zabbix-4.0.1rc2/src/zabbix_proxy/proxy.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_proxy/proxy.c	2018-11-16 12:51:04.856205116 +0500
 @@ -144,6 +144,7 @@
  int	CONFIG_PINGER_FORKS		= 1;
  int	CONFIG_POLLER_FORKS		= 5;
@@ -2585,138 +1908,878 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  int	CONFIG_HISTORY_STORAGE_PIPELINES	= 0;
  
  int	get_process_info_by_thread(int local_server_num, unsigned char *local_process_type, int *local_process_num);
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' zabbix-4.0.0/src/zabbix_server/server.c xe-rabbix/src/zabbix_server/server.c
---- zabbix-4.0.0/src/zabbix_server/server.c	2018-10-01 13:35:59.000000000 +0500
-+++ xe-rabbix/src/zabbix_server/server.c	2018-10-22 11:07:02.000000000 +0500
-@@ -157,6 +157,8 @@
- int	CONFIG_PINGER_FORKS		= 1;
- int	CONFIG_POLLER_FORKS		= 5;
- int	CONFIG_UNREACHABLE_POLLER_FORKS	= 1;
-+int	CONFIG_ASYNC_SNMP_POLLER_FORKS	= 1;
-+int	CONFIG_ASYNC_AGENT_POLLER_FORKS	= 1;
- int	CONFIG_HTTPPOLLER_FORKS		= 1;
- int	CONFIG_IPMIPOLLER_FORKS		= 0;
- int	CONFIG_TIMER_FORKS		= 1;
-@@ -211,6 +213,11 @@
- char	*CONFIG_TMPDIR			= NULL;
- char	*CONFIG_FPING_LOCATION		= NULL;
- char	*CONFIG_FPING6_LOCATION		= NULL;
-+char	*CONFIG_NMAP_LOCATION		= NULL;
-+char	*CONFIG_NMAP_PARAMS		= NULL;
-+char	*CONFIG_HISTORY_STORAGE_TYPE	= NULL;
-+char	*CONFIG_HISTORY_STORAGE_TABLE_NAME = NULL;
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/events.c zabbix-4.0.1.fixed/src/zabbix_server/events.c
+--- zabbix-4.0.1rc2/src/zabbix_server/events.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/events.c	2018-11-16 12:51:04.856205116 +0500
+@@ -1716,7 +1716,11 @@
+ 		zbx_hashset_clear(&hosts);
+ 		zbx_vector_uint64_clear(&hostids);
+ 
+-		zbx_problems_export_write(json.buffer, json.buffer_size);
++		if (SUCCEED == zbx_is_export_enabled())
++			zbx_problems_export_write(json.buffer, json.buffer_size);
 +
- char	*CONFIG_DBHOST			= NULL;
- char	*CONFIG_DBNAME			= NULL;
- char	*CONFIG_DBSCHEMA		= NULL;
-@@ -376,6 +383,16 @@
- 		*local_process_type = ZBX_PROCESS_TYPE_UNREACHABLE;
- 		*local_process_num = local_server_num - server_count + CONFIG_UNREACHABLE_POLLER_FORKS;
++		zbx_register_problem(events[i].eventid, json.buffer);
++
  	}
-+	else if (local_server_num <= (server_count += CONFIG_ASYNC_SNMP_POLLER_FORKS))
-+	{
-+		*local_process_type = ZBX_PROCESS_TYPE_ASYNC_SNMP;
-+		*local_process_num = local_server_num - server_count + CONFIG_ASYNC_SNMP_POLLER_FORKS;
-+	}
-+	else if (local_server_num <= (server_count += CONFIG_ASYNC_AGENT_POLLER_FORKS))
-+	{
-+		*local_process_type = ZBX_PROCESS_TYPE_ASYNC_AGENT;
-+		*local_process_num = local_server_num - server_count + CONFIG_ASYNC_AGENT_POLLER_FORKS;
-+	}
- 	else if (local_server_num <= (server_count += CONFIG_TRAPPER_FORKS))
- 	{
- 		*local_process_type = ZBX_PROCESS_TYPE_TRAPPER;
-@@ -444,6 +461,18 @@
- 	if (NULL == CONFIG_FPING6_LOCATION)
- 		CONFIG_FPING6_LOCATION = zbx_strdup(CONFIG_FPING6_LOCATION, "/usr/sbin/fping6");
- #endif
-+	if (NULL == CONFIG_NMAP_LOCATION)
-+		CONFIG_NMAP_LOCATION = zbx_strdup(CONFIG_NMAP_LOCATION, "/usr/bin/nmap");
-+
-+	if (NULL == CONFIG_NMAP_PARAMS)
-+		CONFIG_NMAP_PARAMS = zbx_strdup(CONFIG_NMAP_PARAMS, "-n -sn -PE");
+ 
+ 	zbx_hashset_iter_reset(&event_recovery, &iter);
+@@ -1734,8 +1738,10 @@
+ 		zbx_json_addint64(&json, ZBX_PROTO_TAG_VALUE, event->value);
+ 		zbx_json_adduint64(&json, ZBX_PROTO_TAG_EVENTID, event->eventid);
+ 		zbx_json_adduint64(&json, ZBX_PROTO_TAG_PROBLEM_EVENTID, recovery->eventid);
+-
+-		zbx_problems_export_write(json.buffer, json.buffer_size);
++		
++		if (SUCCEED == zbx_is_export_enabled())
++			zbx_problems_export_write(json.buffer, json.buffer_size);
++		zbx_register_problem_recovery(recovery->eventid);
+ 	}
+ 
+ 	zbx_problems_export_flush();
+@@ -2563,8 +2569,11 @@
+ 		DCconfig_triggers_apply_changes(&trigger_diff);
+ 		DBupdate_itservices(&trigger_diff);
+ 
+-		if (SUCCEED == zbx_is_export_enabled())
+-			zbx_export_events();
++		//export is used to keep problems hash in memory, but data is flushed to dissk only if export is enabled
++		//inside zbx_export_events() 
++		
++		//if (SUCCEED == zbx_is_export_enabled())
++		zbx_export_events();
+ 
+ 		zbx_clean_events();
+ 		zbx_vector_ptr_clear_ext(&trigger_diff, (zbx_clean_func_t)zbx_trigger_diff_free);
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/pinger/pinger.c zabbix-4.0.1.fixed/src/zabbix_server/pinger/pinger.c
+--- zabbix-4.0.1rc2/src/zabbix_server/pinger/pinger.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/pinger/pinger.c	2018-11-16 12:54:01.716907077 +0500
+@@ -411,13 +411,20 @@
+ static void	get_pinger_hosts(icmpitem_t **icmp_items, int *icmp_items_alloc, int *icmp_items_count)
+ {
+ 	const char		*__function_name = "get_pinger_hosts";
+-	DC_ITEM			items[MAX_PINGER_ITEMS];
++	DC_ITEM			*items;
+ 	int			i, num, count, interval, size, timeout, rc, errcode = SUCCEED;
+ 	char			error[MAX_STRING_LEN], *addr = NULL;
+ 	icmpping_t		icmpping;
+ 	icmppingsec_type_t	type;
+ 
+ 	zabbix_log(LOG_LEVEL_DEBUG, "In %s()", __function_name);
 +	
-+	if (NULL == CONFIG_HISTORY_STORAGE_TYPE)
-+		CONFIG_HISTORY_STORAGE_TYPE = zbx_strdup(CONFIG_HISTORY_STORAGE_TYPE, "clickhouse");
 +
-+	if (NULL == CONFIG_HISTORY_STORAGE_TABLE_NAME)
-+		CONFIG_HISTORY_STORAGE_TABLE_NAME = zbx_strdup(CONFIG_HISTORY_STORAGE_TABLE_NAME, "zabbix.history");
++	if (NULL == (items=zbx_malloc(NULL,sizeof(DC_ITEM)*MAX_PINGER_ITEMS))) 
++	{
++		zabbix_log(LOG_LEVEL_WARNING,"Cannot allocate memory for pinger items");
++		return;
++	}
+ 
+ 	num = DCconfig_get_poller_items(ZBX_POLLER_TYPE_PINGER, items);
+ 
+@@ -455,9 +462,8 @@
+ 	}
+ 
+ 	DCconfig_clean_items(items, NULL, num);
+-
++	zbx_free(items);
+ 	zbx_preprocessor_flush();
+-
+ 	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%d", __function_name, *icmp_items_count);
+ }
+ 
+@@ -540,7 +546,8 @@
+ 		if (i == items_count - 1 || items[i].count != items[i + 1].count || items[i].interval != items[i + 1].interval ||
+ 				items[i].size != items[i + 1].size || items[i].timeout != items[i + 1].timeout)
+ 		{
+-			zbx_setproctitle("%s #%d [pinging hosts]", get_process_type_string(process_type), process_num);
++			//that useless as most of the time process status is "pinging hosts"
++			//zbx_setproctitle("%s #%d [pinging hosts]", get_process_type_string(process_type), process_num);
+ 
+ 			zbx_timespec(&ts);
+ 
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/poller/checks_agent.c zabbix-4.0.1.fixed/src/zabbix_server/poller/checks_agent.c
+--- zabbix-4.0.1rc2/src/zabbix_server/poller/checks_agent.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/poller/checks_agent.c	2018-11-16 12:51:04.860205043 +0500
+@@ -152,3 +152,297 @@
+ 
+ 	return ret;
+ }
 +
- 	if (NULL == CONFIG_EXTERNALSCRIPTS)
- 		CONFIG_EXTERNALSCRIPTS = zbx_strdup(CONFIG_EXTERNALSCRIPTS, DEFAULT_EXTERNAL_SCRIPTS_PATH);
- #ifdef HAVE_LIBCURL
-@@ -576,6 +605,10 @@
- 			PARM_OPT,	0,			1000},
- 		{"StartPollersUnreachable",	&CONFIG_UNREACHABLE_POLLER_FORKS,	TYPE_INT,
- 			PARM_OPT,	0,			1000},
-+		{"StartPollersAsyncSNMP",	&CONFIG_ASYNC_SNMP_POLLER_FORKS,	TYPE_INT,
-+			PARM_OPT,	0,			100},
-+		{"StartPollersAsyncAGENT",	&CONFIG_ASYNC_AGENT_POLLER_FORKS,	TYPE_INT,
-+			PARM_OPT,	0,			100},
- 		{"StartIPMIPollers",		&CONFIG_IPMIPOLLER_FORKS,		TYPE_INT,
- 			PARM_OPT,	0,			1000},
- 		{"StartTimers",			&CONFIG_TIMER_FORKS,			TYPE_INT,
-@@ -614,6 +647,10 @@
- 			PARM_OPT,	0,			0},
- 		{"FpingLocation",		&CONFIG_FPING_LOCATION,			TYPE_STRING,
- 			PARM_OPT,	0,			0},
-+		{"NmapLocation",		&CONFIG_NMAP_LOCATION,			TYPE_STRING,
-+			PARM_OPT,	0,			0},
-+		{"NmapParams",		&CONFIG_NMAP_PARAMS,			TYPE_STRING,
-+			PARM_OPT,	0,			0},
- 		{"Fping6Location",		&CONFIG_FPING6_LOCATION,		TYPE_STRING,
- 			PARM_OPT,	0,			0},
- 		{"Timeout",			&CONFIG_TIMEOUT,			TYPE_INT,
-@@ -718,6 +755,10 @@
- 			PARM_OPT,	0,			0},
- 		{"ExportFileSize",		&CONFIG_EXPORT_FILE_SIZE,		TYPE_UINT64,
- 			PARM_OPT,	ZBX_MEBIBYTE,	ZBX_GIBIBYTE},
-+		{"HistoryStorageType",		&CONFIG_HISTORY_STORAGE_TYPE,		TYPE_STRING,
-+			PARM_OPT,	1,			0},
-+		{"HistoryStorageTableName",		&CONFIG_HISTORY_STORAGE_TABLE_NAME,		TYPE_STRING,
-+			PARM_OPT,	1,			0},
- 		{NULL}
++#define INIT			10
++#define SKIPPED			11
++#define SOCKET_CREATED	12
++#define CONNECT_SENT	13
++#define REQ_SENT		14
++#define	CLOSED			15
++#define ZBX_AGENT_MAX_RESPONSE_TIME 2
++
++//this function follows the socket status and 
++//handles operations according to the socket state
++void handle_socket_operation(zbx_socket_t *socket, DC_ITEM * item, int *errcode, int *conn_status, 
++						 AGENT_RESULT *result, int *active_agents) 
++{
++	
++	ZBX_SOCKADDR	servaddr_in;
++	struct hostent	*hp;
++	ssize_t		received_len;
++	
++	int status;
++
++	switch (*conn_status) {
++		case SOCKET_CREATED:
++			zabbix_log(LOG_LEVEL_DEBUG,"Starting connect to item");
++
++			if (NULL == (hp = gethostbyname(item->interface.addr)))
++			{
++				SET_MSG_RESULT(result, zbx_strdup(NULL, "Cannot get hostname for the ip."));
++				*conn_status=FAIL;
++				*errcode=CONFIG_ERROR;
++				break;	
++			}
++#if !defined(_WINDOWS) && !SOCK_CLOEXEC
++			fcntl(socket->socket, F_SETFD, FD_CLOEXEC);
++#endif
++			servaddr_in.sin_family = AF_INET;
++			servaddr_in.sin_addr.s_addr = ((struct in_addr *)(hp->h_addr))->s_addr;
++			servaddr_in.sin_port = htons(item->interface.port);
++			
++			zabbix_log(LOG_LEVEL_DEBUG,"Doing connect to host %s",item->interface.addr);
++
++			status = connect(socket->socket, (const struct sockaddr *)&servaddr_in, sizeof(servaddr_in));
++			
++			//async connects will return immediately with the error status and EINPROGRESS as errno
++			if (ZBX_PROTO_ERROR == status && EINPROGRESS != errno )
++			{	
++				zabbix_log(LOG_LEVEL_DEBUG,"Connect fail");
++				*conn_status = FAIL;
++				*errcode = CONFIG_ERROR;
++				SET_MSG_RESULT(result, zbx_strdup(NULL, "Cannot  connect to the host"));
++				break;	
++			}
++
++			*conn_status=CONNECT_SENT;
++			break;
++
++		case CONNECT_SENT:
++			zabbix_log(LOG_LEVEL_DEBUG,"Sending data to the socket");
++
++			if (SUCCEED != zbx_tcp_send(socket, item->key))
++			{
++				*errcode = NETWORK_ERROR;
++				*conn_status = FAIL;
++				SET_MSG_RESULT(result, zbx_strdup(NULL, "Cannot send request to the agent"));
++				zabbix_log(LOG_LEVEL_DEBUG,"Data send fail, aborting session");
++			}
++			
++			*conn_status=REQ_SENT;
++			break;
++
++		case REQ_SENT:
++			if (FAIL != (received_len = zbx_tcp_recv_ext(socket, 0)))
++			{
++				*errcode = SUCCEED;
++				zabbix_log(LOG_LEVEL_DEBUG, "get value from agent result: '%s'", socket->buffer);
++
++				zbx_rtrim(socket->buffer, " \r\n");
++				zbx_ltrim(socket->buffer, " ");
++
++				if (0 == strcmp(socket->buffer, ZBX_NOTSUPPORTED))
++				{
++					/* 'ZBX_NOTSUPPORTED\0<error message>' */
++					if (sizeof(ZBX_NOTSUPPORTED) < socket->read_bytes)
++						SET_MSG_RESULT(result, zbx_dsprintf(NULL, "%s", socket->buffer + sizeof(ZBX_NOTSUPPORTED)));
++					else
++						SET_MSG_RESULT(result, zbx_strdup(NULL, "Not supported by Zabbix Agent"));
++						*errcode = NOTSUPPORTED;
++				}
++				else if (0 == strcmp(socket->buffer, ZBX_ERROR))
++				{
++					SET_MSG_RESULT(result, zbx_strdup(NULL, "Zabbix Agent non-critical error"));
++					*errcode = AGENT_ERROR;
++				}
++				else if (0 == received_len)
++				{
++					SET_MSG_RESULT(result, zbx_dsprintf(NULL, "Received empty response from Zabbix Agent at [%s]."
++						" Assuming that agent dropped connection because of access permissions.", item->interface.addr));
++					*errcode = NETWORK_ERROR;
++				}
++				else
++					set_result_type(result, ITEM_VALUE_TYPE_TEXT, socket->buffer);
++			} else 
++			{
++					zabbix_log(LOG_LEVEL_DEBUG, "Get value from agent failed: %s", zbx_socket_strerror());
++					SET_MSG_RESULT(result, zbx_dsprintf(NULL, "Get value from agent failed: %s", zbx_socket_strerror()));
++					*errcode=NETWORK_ERROR;
++			}					
++		
++			zbx_tcp_close(socket);				
++			
++			socket->socket=0;
++			*conn_status=FAIL;
++			
++			*active_agents=*active_agents-1;
++			
++			zabbix_log(LOG_LEVEL_DEBUG, "finished socket processing %d",*active_agents);
++			break;
++	} 
++
++}
++
++
++int	get_value_agent_async(DC_ITEM *items, AGENT_RESULT *results, int *errcodes, int num)
++{
++	const char	*__function_name = "get_value_agent_async";
++	zbx_socket_t	*s;	
++	char		*tls_arg1, *tls_arg2;
++	int			i,	ret=SUCCEED,	max_socket;
++	// connects=0;
++	int 		*conn_status;
++	unsigned int active_agents=0;
++	unsigned int starttime;
++
++
++	zabbix_log(LOG_LEVEL_DEBUG,"Started async agent polling for %d items", num);
++
++	if (NULL == (s=zbx_malloc(NULL, num*sizeof(zbx_socket_t)))) {
++		zabbix_log(LOG_LEVEL_WARNING,"Couldn't allocate memory for sockets");
++		return FAIL;
++	};
++
++	memset(s, 0, num*sizeof(zbx_socket_t));
++	
++	if (NULL == (conn_status=zbx_malloc(NULL, num*sizeof(unsigned int))))
++	{
++		zabbix_log(LOG_LEVEL_WARNING,"Couldn't allocate memory for sockets");
++		return FAIL;
++	};
++
++	//starting connections
++	for ( i = 0; i < num; i++ ) 
++	{
++		conn_status[i]=INIT;
++		s[i].buf_type = ZBX_BUF_TYPE_STAT;
++
++		//cheick if the item is agent type
++		if (  ITEM_TYPE_ZABBIX != items[i].type )	
++		{	
++			conn_status[i]=SKIPPED;
++			continue;
++		}
++			
++		zabbix_log(LOG_LEVEL_TRACE, "In %s() host:'%s' addr:'%s' key:'%s' conn:'%s'", __function_name,
++				items[i].host.host, items[i].interface.addr, items[i].key,
++				zbx_tcp_connection_type_name(items[i].host.tls_connect));
++
++		switch (items[i].host.tls_connect)
++		{
++			case ZBX_TCP_SEC_UNENCRYPTED:
++				tls_arg1 = NULL;
++				tls_arg2 = NULL;
++				break;
++#if defined(HAVE_POLARSSL) || defined(HAVE_GNUTLS) || defined(HAVE_OPENSSL)
++			case ZBX_TCP_SEC_TLS_CERT:
++				tls_arg1 = item->host.tls_issuer;
++				tls_arg2 = item->host.tls_subject;
++				break;
++			case ZBX_TCP_SEC_TLS_PSK:
++				tls_arg1 = items[i].host.tls_psk_identity;
++				tls_arg2 = items[i].host.tls_psk;
++				break;
++#else
++			case ZBX_TCP_SEC_TLS_CERT:
++			case ZBX_TCP_SEC_TLS_PSK:
++				SET_MSG_RESULT(&results[i], zbx_dsprintf(NULL, "A TLS connection is configured to be used with agent"
++					" but support for TLS was not compiled into %s.",
++					get_program_type_string(program_type)));
++				conn_status[i]=SKIPPED;
++				errcodes[i]=CONFIG_ERROR;
++				continue;
++#endif
++			default:
++				THIS_SHOULD_NEVER_HAPPEN;
++				SET_MSG_RESULT(&results[i], zbx_strdup(NULL, "Invalid TLS connection parameters."));
++				conn_status[i]=SKIPPED;
++				errcodes[i]=CONFIG_ERROR;
++				continue;
++		}
++
++				
++		if (ZBX_SOCKET_ERROR == (s[i].socket = socket(AF_INET,  SOCK_STREAM | SOCK_NONBLOCK |  SOCK_CLOEXEC, 0)))
++		{
++			conn_status[i]=SKIPPED;
++			errcodes[i]=CONFIG_ERROR;
++			SET_MSG_RESULT(&results[i], zbx_strdup(NULL, "Couldn't create socket"));
++			continue;
++		}
++		conn_status[i]=SOCKET_CREATED;
++		max_socket=s[i].socket;
++		active_agents++;
++		
++		//todo: binding to the source ip code
++				
++		handle_socket_operation(&s[i],&items[i],&errcodes[i],&conn_status[i],&results[i],&active_agents);
++		
++	}
++			
++	starttime=time(NULL);
++	zabbix_log(LOG_LEVEL_DEBUG,"Starting waiting for %d sockets to connect",active_agents);
++
++	while (active_agents>0 && (time(NULL)-starttime)< ZBX_AGENT_MAX_RESPONSE_TIME *2) 
++	{
++		
++		//this was the simplest and compact way to implement async io
++		//i has tried select() + FD_ISSET, while its seems to work
++		//it requires much more CPU for large batches of hosts
++		//probably it's worth of trying libevent if some problems arise, especially it's already 
++		//used and linked to the daemon, but one usleep hanles all that 
++		
++		usleep(10000);
++		
++		for ( i=0; i<num; i++) 
++		{
++			if (SKIPPED == conn_status[i] || FAIL == conn_status[i] || CLOSED == conn_status[i]) 
++				continue;
++
++			//the socket is in connection phase, checking that it's ready to be written to
++			if (CONNECT_SENT == conn_status[i]) {
++				int result,ret;
++				socklen_t result_len = sizeof(result);
++				
++				ret=getsockopt(s[i].socket, SOL_SOCKET, SO_ERROR, &result, &result_len); 
++				if (ret<0)
++				{
++    				zabbix_log(LOG_LEVEL_DEBUG, "Connection is not ready yet %d", ret);
++    				continue;
++				}
++				if ( 0!= result ) {
++					zabbix_log(LOG_LEVEL_DEBUG, "Connection %d has failed", i);
++					SET_MSG_RESULT(&results[i], zbx_strdup(NULL, "Connection to the host failed: check firewall rules and agent is running"));
++					conn_status[i]==CLOSED;
++					errcodes[i]=NETWORK_ERROR;
++					continue;
++				}
++				
++			} else 	if (REQ_SENT == conn_status[i] ) 
++			{ 
++				//checking if there are some data waiting for us in the socket
++				int count;
++				ioctl(s[i].socket, FIONREAD, &count);
++			
++				if ( 0 == count) continue;  
++				
++			} else {
++				//self-check zabbix team syle: this should never happen :)
++				THIS_SHOULD_NEVER_HAPPEN;
++				continue;
++			}
++
++			handle_socket_operation(&s[i],&items[i],&errcodes[i],&conn_status[i],&results[i],&active_agents);
++		}
++		
++	} 
++	
++	zabbix_log(LOG_LEVEL_DEBUG,"There are %d active connections timed-out",active_agents); 
++
++	//closing sockets for timed out items
++	for ( i = 0; i < num; i++) 
++	{
++		if (s[i].socket) zbx_tcp_close(&s[i]);
++
++		if (REQ_SENT == conn_status[i] || CONNECT_SENT ==conn_status[i]) {
++			zabbix_log(LOG_LEVEL_DEBUG, "Connection %d has timed out while waiting for responce", num);
++			SET_MSG_RESULT(&results[i], zbx_strdup(NULL, "Waiting for responce timed out"));
++			errcodes[i]=TIMEOUT_ERROR;
++			continue;
++		}
++	}
++
++	zbx_free(s);
++	zbx_free(conn_status);
++	zabbix_log(LOG_LEVEL_DEBUG, "End of %s: %d agents, %d succesifull",__function_name, num, num-active_agents);
++}
++
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/poller/checks_agent.h zabbix-4.0.1.fixed/src/zabbix_server/poller/checks_agent.h
+--- zabbix-4.0.1rc2/src/zabbix_server/poller/checks_agent.h	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/poller/checks_agent.h	2018-11-16 12:51:04.860205043 +0500
+@@ -27,4 +27,8 @@
+ 
+ int	get_value_agent(DC_ITEM *item, AGENT_RESULT *result);
+ 
++//this is coming soon 
++int	get_value_agent_async(DC_ITEM *items, AGENT_RESULT *results, int *errcodes, int num);
++
++
+ #endif
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/poller/checks_snmp.c zabbix-4.0.1.fixed/src/zabbix_server/poller/checks_snmp.c
+--- zabbix-4.0.1rc2/src/zabbix_server/poller/checks_snmp.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/poller/checks_snmp.c	2018-11-16 12:51:04.860205043 +0500
+@@ -1548,14 +1548,23 @@
+ 	static zbx_mib_norm_t mibs[] =
+ 	{
+ 		/* the most popular items first */
++		{LEN_STR("ifHCOutUcastPkts"),".1.3.6.1.2.1.31.1.1.1.11"},
++		{LEN_STR("ifHCInUcastPkts"),".1.3.6.1.2.1.31.1.1.1.7"},
++		{LEN_STR("ifHCInOctets"),	".1.3.6.1.2.1.31.1.1.1.6"},
++		{LEN_STR("ifHCOutOctets"),	".1.3.6.1.2.1.31.1.1.1.10"},
++		{LEN_STR("ifHCOutOctets"),	".1.3.6.1.2.1.31.1.1.1.10"},
++		{LEN_STR("rmon.19.2.0"),	".1.3.6.1.2.1.16.19.2.0"},
++		{LEN_STR("ifHighSpeed"),	".1.3.6.1.2.1.31.1.1.1.15"},
++ 		{LEN_STR("ifAlias"),		".1.3.6.1.2.1.31.1.1.1.18"},
+ 		{LEN_STR("ifDescr"),		".1.3.6.1.2.1.2.2.1.2"},
+ 		{LEN_STR("ifInOctets"),		".1.3.6.1.2.1.2.2.1.10"},
+ 		{LEN_STR("ifOutOctets"),	".1.3.6.1.2.1.2.2.1.16"},
++		{LEN_STR("sysName"),		".1.3.6.1.2.1.1.5"},
+ 		{LEN_STR("ifAdminStatus"),	".1.3.6.1.2.1.2.2.1.7"},
+ 		{LEN_STR("ifOperStatus"),	".1.3.6.1.2.1.2.2.1.8"},
+ 		{LEN_STR("ifIndex"),		".1.3.6.1.2.1.2.2.1.1"},
+-		{LEN_STR("ifType"),		".1.3.6.1.2.1.2.2.1.3"},
+-		{LEN_STR("ifMtu"),		".1.3.6.1.2.1.2.2.1.4"},
++		{LEN_STR("ifType"),		    ".1.3.6.1.2.1.2.2.1.3"},
++		{LEN_STR("ifMtu"),	  	    ".1.3.6.1.2.1.2.2.1.4"},
+ 		{LEN_STR("ifSpeed"),		".1.3.6.1.2.1.2.2.1.5"},
+ 		{LEN_STR("ifPhysAddress"),	".1.3.6.1.2.1.2.2.1.6"},
+ 		{LEN_STR("ifInUcastPkts"),	".1.3.6.1.2.1.2.2.1.11"},
+@@ -1568,6 +1577,10 @@
+ 		{LEN_STR("ifOutDiscards"),	".1.3.6.1.2.1.2.2.1.19"},
+ 		{LEN_STR("ifOutErrors"),	".1.3.6.1.2.1.2.2.1.20"},
+ 		{LEN_STR("ifOutQLen"),		".1.3.6.1.2.1.2.2.1.21"},
++		{LEN_STR("IF-MIB::ifHCOutOctets"),	".1.3.6.1.2.1.31.1.1.1.10"},
++		{LEN_STR("IF-MIB::ifHCInOctets"),	".1.3.6.1.2.1.31.1.1.1.6"},
++		{LEN_STR("IF-MIB::ifOutUcastPkts"),	".1.3.6.1.2.1.2.2.1.17"},
++		{LEN_STR("IF-MIB::ifInUcastPkts"),	".1.3.6.1.2.1.2.2.1.11"},
+ 		{0}
  	};
+ #undef LEN_STR
+@@ -2154,4 +2167,415 @@
+ 	init_snmp(progname);
+ }
  
-@@ -941,7 +982,7 @@
- 	zabbix_log(LOG_LEVEL_INFORMATION, "VMware monitoring:         " VMWARE_FEATURE_STATUS);
- 	zabbix_log(LOG_LEVEL_INFORMATION, "SMTP authentication:       " SMTP_AUTH_FEATURE_STATUS);
- 	zabbix_log(LOG_LEVEL_INFORMATION, "Jabber notifications:      " JABBER_FEATURE_STATUS);
--	zabbix_log(LOG_LEVEL_INFORMATION, "Ez Texting notifications:  " LIBCURL_FEATURE_STATUS);
-+	zabbix_log(LOG_LEVEL_INFORMATION, "CURL support:		" LIBCURL_FEATURE_STATUS);
- 	zabbix_log(LOG_LEVEL_INFORMATION, "ODBC:                      " ODBC_FEATURE_STATUS);
- 	zabbix_log(LOG_LEVEL_INFORMATION, "SSH2 support:              " SSH2_FEATURE_STATUS);
- 	zabbix_log(LOG_LEVEL_INFORMATION, "IPv6 support:              " IPV6_FEATURE_STATUS);
-@@ -1060,7 +1101,8 @@
- 		CONFIG_IPMIMANAGER_FORKS = 1;
++
++
++//to do: consider giving up this function, it's pretty useless, could be replaced by one if statement
++int async_submit_result (int status, struct snmp_session *sp, struct snmp_pdu *response, AGENT_RESULT *result)
++{
++	const char	*__function_name = "async_submit_result";
++	struct variable_list *var;
++
++	zabbix_log(LOG_LEVEL_DEBUG, "In: %s() started ",__function_name);
++
++
++	switch (status) 
++	{
++		case STAT_SUCCESS:
++			var = response->variables;
++		 	zabbix_log(LOG_LEVEL_DEBUG, "In: %s() stat_success %ld",__function_name,response->errstat);
++
++			if (SNMP_ERR_NOERROR == response->errstat) 
++			{
++				zabbix_log(LOG_LEVEL_DEBUG, "In: %s() before while ",__function_name);
++				while (var) 
++				{
++					zabbix_log(LOG_LEVEL_DEBUG, "%s() calling zbx_snmp_set_result ",__function_name);
++					zbx_snmp_set_result(var, result);
++					var = var->next_variable;
++				}
++			} else 
++			{
++				zabbix_log(LOG_LEVEL_DEBUG, "%s() there was an error in SNMP responce from the host",__function_name);
++			}
++			return SUCCEED;
++
++			case STAT_TIMEOUT:
++				zabbix_log(LOG_LEVEL_DEBUG, "%s() there was a timeout in SNMP request to %s",__function_name,sp->peername);
++				return FAIL;
++
++			case STAT_ERROR:
++				zabbix_log(LOG_LEVEL_DEBUG, "%s() there was an error in SNMP responce from %s",__function_name,sp->peername);
++				return 0;
++	}
++	return 0;
++}
++
++/* structures keep thread safe per session configuration to be used in snmp callbacks */
++struct async_snmp_conf
++{
++	size_t	parsed_oid_lens[MAX_ASYNC_SNMP_ITEMS];
++	char	oids_translated[MAX_ASYNC_SNMP_ITEMS][ITEM_SNMP_OID_LEN_MAX];
++	oid		parsed_oids[MAX_ASYNC_SNMP_ITEMS][MAX_OID_LEN];
++
++	int				*errcodes;
++	AGENT_RESULT	*results;
++	const DC_ITEM	*items;
++	int				active_hosts; /* hosts that we have not completed */
++
++};
++
++struct async_snmp_session 
++{
++	struct			snmp_session *sess;		/* SNMP session data */
++	int				current_item;		/* Items index  in the items array we've processing */
++	int				max_items;		//items count int the items array, to stop iterating
++	struct			async_snmp_conf *conf;
++};
++/*
++ * SNMP callback  responce handler
++ */
++int asynch_response(int operation, struct snmp_session *sp, int reqid,
++		    struct snmp_pdu *pdu, void *magic)
++{
++
++	const char	*__function_name = "asynch_response";
++
++	struct async_snmp_session *sess = (struct async_snmp_session *)magic;
++	struct async_snmp_conf *conf=sess->conf;
++
++	struct snmp_pdu *req;
++	zbx_uint64_t	prev_hostid;
++
++	prev_hostid=conf->items[sess->current_item].host.hostid;
++//	zabbix_log(LOG_LEVEL_DEBUG, "In %s() callout hostid %d responce is %u", __function_name,prev_hostid,pdu);
++
++	if (operation != NETSNMP_CALLBACK_OP_RECEIVED_MESSAGE) {
++
++		SET_MSG_RESULT(&conf->results[sess->current_item], zbx_strdup(NULL, "snmp timeout"));
++		conf->errcodes[sess->current_item]=TIMEOUT_ERROR;
++		async_submit_result(STAT_TIMEOUT, sp, pdu,&conf->results[sess->current_item]);
++
++		conf->active_hosts--;
++		return 1;
++	} else 
++	{
++		async_submit_result(STAT_SUCCESS, sess->sess, pdu, &conf->results[sess->current_item]);
++		conf->errcodes[sess->current_item]=SUCCEED;
++	}
++
++	//iterating to next snmp item in the list while processing the same host
++	//and skipping any non-snmp type items 
++	sess->current_item++;
++	while (sess->current_item < sess->max_items ) {
++		if  (SUCCEED == is_snmp_type(conf->items[sess->current_item].type)) {
++			zabbix_log(LOG_LEVEL_DEBUG, "In %s() found snmp item",__function_name);
++			break;
++		}
++		sess->current_item++;
++		zabbix_log(LOG_LEVEL_DEBUG, "In %s() skipping non-snmp item",__function_name);
++	}
++
++	//checking if we're not at the end of items list
++	if ( sess->current_item < sess->max_items) {
++
++		//and still processing the same host
++		if (conf->items[sess->current_item].host.hostid == prev_hostid ) {
++
++			//then sending next oid query in case there is an oid
++			if ( conf->items[sess->current_item].snmp_oid ) {
++
++				zabbix_log(LOG_LEVEL_DEBUG, "In %s() Parsing oids and adding null vals", __function_name);
++				conf->parsed_oid_lens[sess->current_item] = MAX_OID_LEN;
++
++				//oid translation
++				if (NULL != conf->items[sess->current_item].snmp_oid )	
++				{
++					zbx_snmp_translate(	conf->oids_translated[sess->current_item], 
++										conf->items[sess->current_item].snmp_oid,
++										sizeof(conf->oids_translated[sess->current_item]));
++				}  else 
++				{
++					SET_MSG_RESULT(	&conf->results[sess->current_item], 
++									zbx_dsprintf(NULL, "zbx_snmp_translate(): cannot parse OID \"%s\".",
++									conf->oids_translated[sess->current_item]));
++					zabbix_log(	LOG_LEVEL_DEBUG, "In %s() cannot translate oid %s for hostid %ld", 
++								__function_name,
++								conf->oids_translated[sess->current_item],
++								conf->items[sess->current_item].host.hostid);
++
++					conf->errcodes[sess->current_item] = CONFIG_ERROR;
++					conf->active_hosts--;
++					return 1;
++				}
++
++				if (NULL == snmp_parse_oid(	conf->oids_translated[sess->current_item],
++											conf->parsed_oids[sess->current_item], 
++											&conf->parsed_oid_lens[sess->current_item])) 
++				{
++					SET_MSG_RESULT(	&conf->results[sess->current_item], 
++									zbx_dsprintf(NULL, "snmp_parse_oid(): cannot parse OID \"%s\".",
++												conf->oids_translated[sess->current_item]));
++
++					zabbix_log(	LOG_LEVEL_DEBUG, 
++								"In %s() cannot snmp_parse_oid %s for hostid %ld", 
++								__function_name,
++								conf->oids_translated[sess->current_item],
++								conf->items[sess->current_item].host.hostid);
++
++					conf->errcodes[sess->current_item] = CONFIG_ERROR;
++					conf->active_hosts--;
++					return 1;
++				}
++
++				if (NULL == (req = snmp_pdu_create(SNMP_MSG_GET))) 
++				{
++					zabbix_log(LOG_LEVEL_DEBUG, "In %s() cannot create pdu for hostid %ld", 
++							__function_name,conf->items[sess->current_item].host.hostid);
++
++					conf->errcodes[sess->current_item]=CONFIG_ERROR;
++					conf->active_hosts--;
++					return 1;
++				}
++
++				if (NULL == snmp_add_null_var(req, conf->parsed_oids[sess->current_item], conf->parsed_oid_lens[sess->current_item]))
++				{
++					SET_MSG_RESULT(&conf->results[sess->current_item], zbx_strdup(NULL, "snmp_add_null_var(): cannot add null variable."));
++					zabbix_log(LOG_LEVEL_DEBUG, "In %s() cannot add  vars  hostid %ld", 
++							__function_name,conf->items[sess->current_item].host.hostid);
++
++					conf->errcodes[sess->current_item] = CONFIG_ERROR;
++					snmp_free_pdu(req);
++					conf->active_hosts--;
++					return 1;
++				}
++
++				if (snmp_send(sp, req)) {
++					return 1;
++				} else {
++					snmp_perror("snmp_send");
++					snmp_free_pdu(req);
++
++					zabbix_log(LOG_LEVEL_DEBUG, "In %s() couldn't send snmp request for  hostid %ld", 
++							__function_name,conf->items[sess->current_item].host.hostid);
++
++					SET_MSG_RESULT(&conf->results[sess->current_item], zbx_strdup(NULL, "snmp_send couldn't send a packet"));
++					conf->errcodes[sess->current_item] = NETWORK_ERROR;
++				}
++			}
++		}
++	}
++
++	conf->active_hosts--;
++	return 1;
++}
++
++
++void	get_values_snmp_async(const DC_ITEM *items, AGENT_RESULT *results, int *errcodes, int num)
++{
++	const char		*__function_name = "get_values_snmp";
++
++	char				error[MAX_STRING_LEN];
++	struct snmp_session	*ss [MAX_ASYNC_SNMP_ITEMS];
++	int					i, err = SUCCEED, max_succeed = 0,ret=0;
++	struct snmp_pdu		*pdus[MAX_ASYNC_SNMP_ITEMS], *response;
++
++	size_t			max_error_len;
++
++	struct		variable_list *var;
++	int			snmp_sessions=0;
++	struct		async_snmp_session *hs;
++	struct		async_snmp_conf *conf;
++
++	zbx_uint64_t	last_hostid=0;
++
++
++	zabbix_log(LOG_LEVEL_DEBUG, "In %s() Started. Got num:%d OIDs to parse",
++			__function_name, num);
++
++
++	if (NULL == (hs = zbx_malloc(NULL, sizeof(struct async_snmp_session) * MAX_ASYNC_SNMP_ITEMS))) 	return;
++	if (NULL == (conf = zbx_malloc(NULL,sizeof(struct async_snmp_conf)))) return;
++
++	
++	conf->items=items;
++	conf->results=results;
++	conf->errcodes=errcodes;
++	conf->active_hosts=0;
++
++
++	for ( i = 0; i < num; i++) 
++	{
++
++		if (SUCCEED != is_snmp_type( items[i].type )) {
++			zabbix_log(LOG_LEVEL_DEBUG, "skipping non-snmp item %d",i);
++			continue;	
++		}
++		
++
++		if (  
++			0 != (ZBX_FLAG_DISCOVERY_RULE & items[i].flags) ||
++			0 == strncmp(items[i].snmp_oid, "discovery[", 10) || 
++			NULL != strchr(items[i].snmp_oid, '[')
++			)
++		{
++			//skipping any dynamic items, they will be processed slow-old-sync way
++			zabbix_log(LOG_LEVEL_DEBUG, "skipping discovery item %d",i);
++			continue;
++		}
++
++		//setting fail code by default to disable for a while items we haven't been able to access
++		errcodes[i]=TIMEOUT_ERROR;
++
++		if (items[i].host.hostid != last_hostid) 
++		{
++			last_hostid=items[i].host.hostid;
++			zabbix_log(LOG_LEVEL_DEBUG, "In %s() found new host host id %ld, session is %d", __function_name,last_hostid,snmp_sessions);
++
++			hs[snmp_sessions].conf=conf;
++			hs[snmp_sessions].current_item=i;
++			hs[snmp_sessions].max_items=num;
++
++			conf->parsed_oid_lens[i] = MAX_OID_LEN;
++
++			zabbix_log(LOG_LEVEL_DEBUG, "In %s() init completed %ld", __function_name,last_hostid);
++
++			//starting new session for it:
++			if (NULL == (ss[snmp_sessions]=zbx_snmp_open_session(&items[i], error, sizeof(error))))
++			{
++				err = CONFIG_ERROR;
++				errcodes[i]=FAIL;
++				zabbix_log(LOG_LEVEL_DEBUG, "In %s() Opening snmp sessions: failed to open session for item %d", __function_name,i);
++				SET_MSG_RESULT(&results[i], zbx_dsprintf(NULL, "Couldn't open snmp session"));
++				
++				continue;
++			} 
++
++#define SNMP_RETRIES	1
++#define SNMP_TIMEOUT	2
++			ss[snmp_sessions]->callback = asynch_response;
++			ss[snmp_sessions]->callback_magic = &hs[snmp_sessions];
++			ss[snmp_sessions]->retries=SNMP_RETRIES;
++			ss[snmp_sessions]->timeout=SNMP_TIMEOUT*1000*1000;
++
++			zabbix_log(LOG_LEVEL_DEBUG, "In %s() session is opened %ld", __function_name,last_hostid);
++
++			if (NULL != items[i].snmp_oid )
++			{
++				zbx_snmp_translate(conf->oids_translated[i], items[i].snmp_oid, sizeof(conf->oids_translated[i]));
++			}  else 
++			{
++				zabbix_log(LOG_LEVEL_DEBUG, "In %s() cannot translate empty oid %s for hostid %ld", __function_name, 
++						conf->oids_translated[i],items[i].host.hostid);
++
++				SET_MSG_RESULT(&results[i], zbx_dsprintf(NULL, "snmp_parse_oid(): empty OID"));
++				errcodes[i] = CONFIG_ERROR;
++				continue;
++			}
++
++			//zabbix_log(LOG_LEVEL_DEBUG, "In %s() Opening snmp sessions: created session for item %d, code is %d", __function_name,i,errcodes[i]);
++
++			if (NULL == snmp_parse_oid(conf->oids_translated[i], conf->parsed_oids[i], &conf->parsed_oid_lens[i]))
++			{
++				SET_MSG_RESULT(&results[i], zbx_dsprintf(NULL, "snmp_parse_oid(): cannot parse OID \"%s\".",
++						conf->oids_translated[i]));
++				zabbix_log(LOG_LEVEL_DEBUG, "In %s() cannot snmp_parse_oid %s for hostid %ld", __function_name,
++					conf->oids_translated[i], items[i].host.hostid);
++				errcodes[i] = CONFIG_ERROR;
++				continue;
++			}
++
++			if (NULL == (pdus[snmp_sessions] = snmp_pdu_create(SNMP_MSG_GET)))
++			{
++				SET_MSG_RESULT(&results[i], zbx_dsprintf(NULL, "snmp_pdu_create(): cannot create PDU object "));
++				zabbix_log(LOG_LEVEL_DEBUG, "In %s() cannot create pdu for hostid %ld",__function_name,conf->items[i].host.hostid);
++				errcodes[i]=CONFIG_ERROR;
++				continue;
++			}
++
++
++			if (NULL == snmp_add_null_var(pdus[snmp_sessions], conf->parsed_oids[i], conf->parsed_oid_lens[i]))
++			{
++				SET_MSG_RESULT(&results[i], zbx_strdup(NULL, "snmp_add_null_var(): cannot add null variable."));
++				zabbix_log(LOG_LEVEL_DEBUG, "In %s() cannot add  vars  hostid %ld",__function_name,conf->items[i].host.hostid);
++				errcodes[i] = CONFIG_ERROR;
++				snmp_free_pdu(pdus[snmp_sessions]);
++				//zbx_snmp_close_session(ss[snmp_sessions]);
++				continue;
++			}
++
++
++			zabbix_log(LOG_LEVEL_DEBUG, "In %s() Sending packet ",__function_name);
++
++			if (snmp_send(ss[snmp_sessions], pdus[snmp_sessions]))
++				conf->active_hosts++;
++			else {
++				snmp_perror("snmp_send");
++
++				snmp_free_pdu(pdus[snmp_sessions]);
++				//zbx_snmp_close_session(ss[snmp_sessions]);
++				zabbix_log(LOG_LEVEL_DEBUG, "In %s() couldn't send snmp request for hostid %ld",__function_name,conf->items[i].host.hostid);
++				SET_MSG_RESULT(&results[i], zbx_strdup(NULL, "Couldn't send snmp packet"));
++				errcodes[i] = NETWORK_ERROR;
++				continue;
++			}
++
++			snmp_sessions++;
++		    
++		} else {
++			//the next item belogns to the same host as before.
++			//iterating to the next item
++			zabbix_log(LOG_LEVEL_DEBUG, "%s() Skipping item %d as it belongs to the same host",__function_name,i);
++			continue;
++		}
++
++	} //iteration over the items array
++	int starttime=time(NULL);
++
++
++#define SNMP_MAX_BATCH_TIME (SNMP_RETRIES+1)*SNMP_TIMEOUT
++
++	 while (conf->active_hosts > 0  && (time(NULL)-starttime)< SNMP_MAX_BATCH_TIME) {
++
++		int fds = 0, block = 1, sessions;
++		fd_set fdset;
++		struct timeval timeout;
++
++		timeout.tv_sec=SNMP_TIMEOUT;
++		timeout.tv_usec=0;
++
++		FD_ZERO(&fdset);
++
++		snmp_select_info(&fds,&fdset,&timeout,&block);
++		fds = select(fds, &fdset, NULL, NULL, block ? NULL : &timeout);
++
++		if (fds < 0) {
++			zabbix_log(LOG_LEVEL_DEBUG, "End of %s() Something unexpected happened with fds ", __function_name);
++			break;
++		}
++
++		if (fds)
++			snmp_read(&fdset);
++		else
++			snmp_timeout();
++		zabbix_log(LOG_LEVEL_DEBUG, "In %s() : waiting for %d pollers to finish", __function_name, conf->active_hosts);
++	}
++
++	/* sessions cleanup */
++	for (i = 0; i < snmp_sessions; i++ ) 
++	{
++		zabbix_log(LOG_LEVEL_DEBUG, "End of %s() freeing session for  item %d", __function_name,i);
++		zbx_snmp_close_session(ss[i]);
++	}
++
++
++	zbx_free(hs);
++	zbx_free(conf);
++
++	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%s", __function_name, zbx_result_string(ret));
++
++	return;
++}
++
++
++
+ #endif	/* HAVE_NETSNMP */
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/poller/checks_snmp.h zabbix-4.0.1.fixed/src/zabbix_server/poller/checks_snmp.h
+--- zabbix-4.0.1rc2/src/zabbix_server/poller/checks_snmp.h	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/poller/checks_snmp.h	2018-11-16 12:51:04.860205043 +0500
+@@ -32,6 +32,7 @@
+ void	zbx_init_snmp(void);
+ int	get_value_snmp(const DC_ITEM *item, AGENT_RESULT *result);
+ void	get_values_snmp(const DC_ITEM *items, AGENT_RESULT *results, int *errcodes, int num);
++void	get_values_snmp_async(const DC_ITEM *items, AGENT_RESULT *results, int *errcodes, int num);
+ #endif
  
- 	threads_num = CONFIG_CONFSYNCER_FORKS + CONFIG_POLLER_FORKS
--			+ CONFIG_UNREACHABLE_POLLER_FORKS + CONFIG_TRAPPER_FORKS + CONFIG_PINGER_FORKS
-+			+ CONFIG_UNREACHABLE_POLLER_FORKS + CONFIG_ASYNC_SNMP_POLLER_FORKS 
-+			+ CONFIG_ASYNC_AGENT_POLLER_FORKS + CONFIG_TRAPPER_FORKS + CONFIG_PINGER_FORKS
- 			+ CONFIG_ALERTER_FORKS + CONFIG_HOUSEKEEPER_FORKS + CONFIG_TIMER_FORKS
- 			+ CONFIG_HTTPPOLLER_FORKS + CONFIG_DISCOVERER_FORKS + CONFIG_HISTSYNCER_FORKS
- 			+ CONFIG_ESCALATOR_FORKS + CONFIG_IPMIPOLLER_FORKS + CONFIG_JAVAPOLLER_FORKS
-@@ -1112,6 +1154,16 @@
- 				thread_args.args = &poller_type;
- 				threads[i] = zbx_thread_start(poller_thread, &thread_args);
- 				break;
-+			case ZBX_PROCESS_TYPE_ASYNC_SNMP:
-+				poller_type = ZBX_POLLER_TYPE_ASYNC_SNMP;
-+				thread_args.args = &poller_type;
-+				threads[i] = zbx_thread_start(poller_thread, &thread_args);
-+				break;
-+			case ZBX_PROCESS_TYPE_ASYNC_AGENT:
-+				poller_type = ZBX_POLLER_TYPE_ASYNC_AGENT;
-+				thread_args.args = &poller_type;
-+				threads[i] = zbx_thread_start(poller_thread, &thread_args);
-+				break;
- 			case ZBX_PROCESS_TYPE_TRAPPER:
- 				thread_args.args = &listen_sock;
- 				threads[i] = zbx_thread_start(trapper_thread, &thread_args);
-diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' -x test.php -x zabbix.conf.php -x '*.ORIG*' zabbix-4.0.0/src/zabbix_server/poller/poller.c xe-rabbix/src/zabbix_server/poller/poller.c
---- zabbix-4.0.0/src/zabbix_server/poller/poller.c	2018-10-17 23:18:07.370357400 +0500
-+++ xe-rabbix/src/zabbix_server/poller/poller.c	2018-11-13 16:58:58.764535905 +0500
+ #endif
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/poller/poller.c zabbix-4.0.1.fixed/src/zabbix_server/poller/poller.c
+--- zabbix-4.0.1rc2/src/zabbix_server/poller/poller.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/poller/poller.c	2018-11-16 12:55:34.867170119 +0500
 @@ -496,23 +496,62 @@
   * Author: Alexei Vladishev                                                   *
   *                                                                            *
@@ -2795,7 +2858,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  		ZBX_STRDUP(items[i].key, items[i].key_orig);
  		if (SUCCEED != substitute_key_macros(&items[i].key, NULL, &items[i], NULL,
-@@ -700,41 +739,52 @@
+@@ -700,41 +739,51 @@
  	}
  
  	zbx_free(port);
@@ -2818,15 +2881,15 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
 -			errcodes[i] = CONFIG_ERROR;
 -		}
 -#endif
-+	if (ZBX_POLLER_TYPE_ASYNC_SNMP == poller_type  || ZBX_POLLER_TYPE_UNREACHABLE == poller_type) {
-+		get_values_snmp_async(items, results, errcodes, num);
- 	}
+-	}
 -	else if (ITEM_TYPE_JMX == items[0].type)
 -	{
 -		zbx_alarm_on(CONFIG_TIMEOUT);
 -		get_values_java(ZBX_JAVA_GATEWAY_REQUEST_JMX, items, results, errcodes, num);
 -		zbx_alarm_off();
--	}
++	if (ZBX_POLLER_TYPE_ASYNC_SNMP == poller_type  || ZBX_POLLER_TYPE_UNREACHABLE == poller_type) {
++		get_values_snmp_async(items, results, errcodes, num);
+ 	}
 -	else if (1 == num)
 +#endif
 +	if (ZBX_POLLER_TYPE_ASYNC_AGENT == poller_type || ZBX_POLLER_TYPE_UNREACHABLE == poller_type) 
@@ -2864,7 +2927,6 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
 +			}
 +			else 
 +			{	
-+				zabbix_log(LOG_LEVEL_DEBUG, "Starting single get_value agent poller call");
 +				errcodes[i] = get_value(&items[i], &results[i], &add_results);
 +			}
 +		}	
@@ -2875,13 +2937,13 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  	/* process item values */
  	for (i = 0; i < num; i++)
-@@ -753,12 +803,20 @@
+@@ -753,12 +802,20 @@
  			case NETWORK_ERROR:
  			case GATEWAY_ERROR:
  			case TIMEOUT_ERROR:
 -				if (HOST_AVAILABLE_FALSE != last_available)
 +				/* for mass problems don't mark host as unreach for async and unreach pollers, because:
-+				first, that sometimes causes a "poll" bug in mysql lib (100% core load on waiting for smth from mysql, probably solvable by alarm)
++				first, that sometimes causes a "poll" bug in mysql lib (100% thread load on waiting in a poll for mysql, probably solvable by alarm)
 +				second, there seems to be no reason for that, async pollers live just fine having even all hosts unreachable */
 +				if ( HOST_AVAILABLE_FALSE != last_available && 
 +						(ZBX_POLLER_TYPE_NORMAL == poller_type || 
@@ -2892,12 +2954,12 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  				}
  				break;
 +			case NOT_PROCESSED:
-+				//this might happen on asyn processing for snmp
++				//this might happen on async processing for snmp
 +				//when a host fails answering an item, next ones are not requested
  			case CONFIG_ERROR:
  				/* nothing to do */
  				break;
-@@ -772,6 +830,7 @@
+@@ -772,6 +829,7 @@
  			if (0 == add_results.values_num)
  			{
  				items[i].state = ITEM_STATE_NORMAL;
@@ -2905,7 +2967,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  				zbx_preprocess_item_value(items[i].itemid, items[i].value_type, items[i].flags,
  						&results[i], &timespec, items[i].state, NULL);
  			}
-@@ -789,6 +848,7 @@
+@@ -789,6 +847,7 @@
  					if (ISSET_MSG(add_result))
  					{
  						items[i].state = ITEM_STATE_NOTSUPPORTED;
@@ -2913,7 +2975,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  						zbx_preprocess_item_value(items[i].itemid, items[i].value_type,
  								items[i].flags, NULL, &ts_tmp, items[i].state,
  								add_result->msg);
-@@ -796,6 +856,7 @@
+@@ -796,6 +855,7 @@
  					else
  					{
  						items[i].state = ITEM_STATE_NORMAL;
@@ -2921,7 +2983,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  						zbx_preprocess_item_value(items[i].itemid, items[i].value_type,
  								items[i].flags, add_result, &ts_tmp, items[i].state,
  								NULL);
-@@ -813,12 +874,13 @@
+@@ -813,12 +873,13 @@
  		else if (NOTSUPPORTED == errcodes[i] || AGENT_ERROR == errcodes[i] || CONFIG_ERROR == errcodes[i])
  		{
  			items[i].state = ITEM_STATE_NOTSUPPORTED;
@@ -2936,7 +2998,7 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
  
  		zbx_free(items[i].key);
  
-@@ -863,30 +925,40 @@
+@@ -863,21 +924,28 @@
  				zbx_free(items[i].jmx_endpoint);
  				break;
  		}
@@ -2965,34 +3027,347 @@ diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x 
 +	return num_collected;
  }
  
-+#define	STAT_INTERVAL	20	
-+#define SLEEP_USEC	20000
++
 +
  ZBX_THREAD_ENTRY(poller_thread, args)
  {
--	int		nextcheck, sleeptime = -1, processed = 0, old_processed = 0;
--	double		sec, total_sec = 0.0, old_total_sec = 0.0;
-+	int		nextcheck;
-+	// sleeptime = -1, 
-+	//processed_total = 0, old_processed = 0;
-+	double		start_sec, work_sec =0.0, sleep_sec=0.0;
-+	// total_sec = 0.0, old_total_sec = 0.0;
- 	time_t		last_stat_time;
- 	unsigned char	poller_type;
--
--#define	STAT_INTERVAL	5	/* if a process is busy and does not sleep then update status not faster than */
--				/* once in STAT_INTERVAL seconds */
-+	
-+	unsigned int collected_per_interval=0, collected_per_run=0, processed_per_interval=0, processed_per_run=0, runs=0;
+ 	int		nextcheck, sleeptime = -1, processed = 0, old_processed = 0;
+@@ -921,7 +989,7 @@
+ 					old_total_sec);
+ 		}
  
- 	poller_type = *(unsigned char *)((zbx_thread_args_t *)args)->args;
- 	process_type = ((zbx_thread_args_t *)args)->process_type;
-@@ -897,7 +969,7 @@
+-		processed += get_values(poller_type, &nextcheck);
++		processed += get_values(poller_type, &nextcheck,&processed);
+ 		total_sec += zbx_time() - sec;
+ 
+ 		sleeptime = calculate_sleeptime(nextcheck, POLLER_DELAY);
+@@ -951,3 +1019,4 @@
+ 
+ #undef STAT_INTERVAL
+ }
++
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/preprocessor/preprocessing.h zabbix-4.0.1.fixed/src/zabbix_server/preprocessor/preprocessing.h
+--- zabbix-4.0.1rc2/src/zabbix_server/preprocessor/preprocessing.h	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/preprocessor/preprocessing.h	2018-11-16 12:51:04.860205043 +0500
+@@ -25,6 +25,7 @@
+ #include "dbcache.h"
+ 
+ #define ZBX_IPC_SERVICE_PREPROCESSING	"preprocessing"
++#define ZBX_IPC_SERVICE_PREPROCESSING_WORKER	"preprocessing_worker"
+ 
+ #define ZBX_IPC_PREPROCESSOR_WORKER	1
+ #define ZBX_IPC_PREPROCESSOR_REQUEST	2
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/preprocessor/preproc_manager.c zabbix-4.0.1.fixed/src/zabbix_server/preprocessor/preproc_manager.c
+--- zabbix-4.0.1rc2/src/zabbix_server/preprocessor/preproc_manager.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/preprocessor/preproc_manager.c	2018-11-16 12:51:04.860205043 +0500
+@@ -40,6 +40,10 @@
+ #define ZBX_PREPROC_PRIORITY_NONE	0
+ #define ZBX_PREPROC_PRIORITY_FIRST	1
+ 
++//this must be big enough to hold buffer for occasional slowdownds, so 10-15 threads might submit data without stucking
++#define ZBX_PREPROCESSING_MAX_QUEUE_TRESHOLD 1000000
++
++
+ typedef enum
+ {
+ 	REQUEST_STATE_QUEUED		= 0,		/* requires preprocessing */
+@@ -1003,7 +1007,8 @@
+ 
+ ZBX_THREAD_ENTRY(preprocessing_manager_thread, args)
+ {
+-	zbx_ipc_service_t		service;
++	zbx_ipc_service_t	service_requests;
++	zbx_ipc_service_t	service_results;
+ 	char				*error = NULL;
+ 	zbx_ipc_client_t		*client;
+ 	zbx_ipc_message_t		*message;
+@@ -1023,7 +1028,14 @@
  	zabbix_log(LOG_LEVEL_INFORMATION, "%s #%d started [%s #%d]", get_program_type_string(program_type),
  			server_num, get_process_type_string(process_type), process_num);
- #ifdef HAVE_NETSNMP
--	if (ZBX_POLLER_TYPE_NORMAL == poller_type || ZBX_POLLER_TYPE_UNREACHABLE == poller_type)
-+	if (ZBX_POLLER_TYPE_NORMAL == poller_type || ZBX_POLLER_TYPE_UNREACHABLE == poller_type || ZBX_POLLER_TYPE_ASYNC_SNMP == poller_type)
- 		zbx_init_snmp();
- #endif
  
+-	if (FAIL == zbx_ipc_service_start(&service, ZBX_IPC_SERVICE_PREPROCESSING, &error))
++	if (FAIL == zbx_ipc_service_start(&service_requests, ZBX_IPC_SERVICE_PREPROCESSING, &error))
++	{
++		zabbix_log(LOG_LEVEL_CRIT, "cannot start preprocessing service for requests: %s", error);
++		zbx_free(error);
++		exit(EXIT_FAILURE);
++	}
++
++	if (FAIL == zbx_ipc_service_start(&service_results, ZBX_IPC_SERVICE_PREPROCESSING_WORKER, &error))
+ 	{
+ 		zabbix_log(LOG_LEVEL_CRIT, "cannot start preprocessing service: %s", error);
+ 		zbx_free(error);
+@@ -1057,7 +1069,22 @@
+ 		}
+ 
+ 		update_selfmon_counter(ZBX_PROCESS_STATE_IDLE);
+-		ret = zbx_ipc_service_recv(&service, ZBX_PREPROCESSING_MANAGER_DELAY, &client, &message);
++
++		if (manager.queued_num > ZBX_PREPROCESSING_MAX_QUEUE_TRESHOLD )
++		{
++			ret = zbx_ipc_service_recv(&service_results,0, &client, &message);
++			preprocessor_assign_tasks(&manager);
++			preprocessing_flush_queue(&manager);
++		 } else
++		{
++			ret = zbx_ipc_service_recv(&service_results, 0, &client, &message);
++			if (NULL == message)
++				ret = zbx_ipc_service_recv(&service_requests, 0, &client, &message);
++			/* CPU burn prevention */
++			if (NULL == message)	
++					usleep(1000);			
++		}
++
+ 		update_selfmon_counter(ZBX_PROCESS_STATE_BUSY);
+ 		sec = zbx_time();
+ 		zbx_update_env(sec);
+@@ -1100,7 +1127,8 @@
+ 		}
+ 	}
+ 
+-	zbx_ipc_service_close(&service);
++	zbx_ipc_service_close(&service_requests);
++	zbx_ipc_service_close(&service_results);
+ 	preprocessor_destroy_manager(&manager);
+ 
+ 	return 0;
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/preprocessor/preproc_worker.c zabbix-4.0.1.fixed/src/zabbix_server/preprocessor/preproc_worker.c
+--- zabbix-4.0.1rc2/src/zabbix_server/preprocessor/preproc_worker.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/preprocessor/preproc_worker.c	2018-11-16 12:51:04.860205043 +0500
+@@ -123,7 +123,7 @@
+ 
+ 	zbx_ipc_message_init(&message);
+ 
+-	if (FAIL == zbx_ipc_socket_open(&socket, ZBX_IPC_SERVICE_PREPROCESSING, 10, &error))
++	if (FAIL == zbx_ipc_socket_open(&socket, ZBX_IPC_SERVICE_PREPROCESSING_WORKER, 10, &error))
+ 	{
+ 		zabbix_log(LOG_LEVEL_CRIT, "cannot connect to preprocessing service: %s", error);
+ 		zbx_free(error);
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/server.c zabbix-4.0.1.fixed/src/zabbix_server/server.c
+--- zabbix-4.0.1rc2/src/zabbix_server/server.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/server.c	2018-11-16 12:51:04.860205043 +0500
+@@ -158,6 +158,8 @@
+ int	CONFIG_PINGER_FORKS		= 1;
+ int	CONFIG_POLLER_FORKS		= 5;
+ int	CONFIG_UNREACHABLE_POLLER_FORKS	= 1;
++int	CONFIG_ASYNC_SNMP_POLLER_FORKS	= 1;
++int	CONFIG_ASYNC_AGENT_POLLER_FORKS	= 1;
+ int	CONFIG_HTTPPOLLER_FORKS		= 1;
+ int	CONFIG_IPMIPOLLER_FORKS		= 0;
+ int	CONFIG_TIMER_FORKS		= 1;
+@@ -212,6 +214,11 @@
+ char	*CONFIG_TMPDIR			= NULL;
+ char	*CONFIG_FPING_LOCATION		= NULL;
+ char	*CONFIG_FPING6_LOCATION		= NULL;
++char	*CONFIG_NMAP_LOCATION		= NULL;
++char	*CONFIG_NMAP_PARAMS		= NULL;
++char	*CONFIG_HISTORY_STORAGE_TYPE	= NULL;
++char	*CONFIG_HISTORY_STORAGE_TABLE_NAME = NULL;
++
+ char	*CONFIG_DBHOST			= NULL;
+ char	*CONFIG_DBNAME			= NULL;
+ char	*CONFIG_DBSCHEMA		= NULL;
+@@ -377,6 +384,16 @@
+ 		*local_process_type = ZBX_PROCESS_TYPE_UNREACHABLE;
+ 		*local_process_num = local_server_num - server_count + CONFIG_UNREACHABLE_POLLER_FORKS;
+ 	}
++	else if (local_server_num <= (server_count += CONFIG_ASYNC_SNMP_POLLER_FORKS))
++	{
++		*local_process_type = ZBX_PROCESS_TYPE_ASYNC_SNMP;
++		*local_process_num = local_server_num - server_count + CONFIG_ASYNC_SNMP_POLLER_FORKS;
++	}
++	else if (local_server_num <= (server_count += CONFIG_ASYNC_AGENT_POLLER_FORKS))
++	{
++		*local_process_type = ZBX_PROCESS_TYPE_ASYNC_AGENT;
++		*local_process_num = local_server_num - server_count + CONFIG_ASYNC_AGENT_POLLER_FORKS;
++	}
+ 	else if (local_server_num <= (server_count += CONFIG_TRAPPER_FORKS))
+ 	{
+ 		*local_process_type = ZBX_PROCESS_TYPE_TRAPPER;
+@@ -445,6 +462,18 @@
+ 	if (NULL == CONFIG_FPING6_LOCATION)
+ 		CONFIG_FPING6_LOCATION = zbx_strdup(CONFIG_FPING6_LOCATION, "/usr/sbin/fping6");
+ #endif
++	if (NULL == CONFIG_NMAP_LOCATION)
++		CONFIG_NMAP_LOCATION = zbx_strdup(CONFIG_NMAP_LOCATION, "/usr/bin/nmap");
++
++	if (NULL == CONFIG_NMAP_PARAMS)
++		CONFIG_NMAP_PARAMS = zbx_strdup(CONFIG_NMAP_PARAMS, "-n -sn -PE");
++	
++	if (NULL == CONFIG_HISTORY_STORAGE_TYPE)
++		CONFIG_HISTORY_STORAGE_TYPE = zbx_strdup(CONFIG_HISTORY_STORAGE_TYPE, "clickhouse");
++
++	if (NULL == CONFIG_HISTORY_STORAGE_TABLE_NAME)
++		CONFIG_HISTORY_STORAGE_TABLE_NAME = zbx_strdup(CONFIG_HISTORY_STORAGE_TABLE_NAME, "zabbix.history");
++
+ 	if (NULL == CONFIG_EXTERNALSCRIPTS)
+ 		CONFIG_EXTERNALSCRIPTS = zbx_strdup(CONFIG_EXTERNALSCRIPTS, DEFAULT_EXTERNAL_SCRIPTS_PATH);
+ #ifdef HAVE_LIBCURL
+@@ -580,6 +609,10 @@
+ 			PARM_OPT,	0,			1000},
+ 		{"StartPollersUnreachable",	&CONFIG_UNREACHABLE_POLLER_FORKS,	TYPE_INT,
+ 			PARM_OPT,	0,			1000},
++		{"StartPollersAsyncSNMP",	&CONFIG_ASYNC_SNMP_POLLER_FORKS,	TYPE_INT,
++			PARM_OPT,	0,			100},
++		{"StartPollersAsyncAGENT",	&CONFIG_ASYNC_AGENT_POLLER_FORKS,	TYPE_INT,
++			PARM_OPT,	0,			100},
+ 		{"StartIPMIPollers",		&CONFIG_IPMIPOLLER_FORKS,		TYPE_INT,
+ 			PARM_OPT,	0,			1000},
+ 		{"StartTimers",			&CONFIG_TIMER_FORKS,			TYPE_INT,
+@@ -618,6 +651,10 @@
+ 			PARM_OPT,	0,			0},
+ 		{"FpingLocation",		&CONFIG_FPING_LOCATION,			TYPE_STRING,
+ 			PARM_OPT,	0,			0},
++		{"NmapLocation",		&CONFIG_NMAP_LOCATION,			TYPE_STRING,
++			PARM_OPT,	0,			0},
++		{"NmapParams",		&CONFIG_NMAP_PARAMS,			TYPE_STRING,
++			PARM_OPT,	0,			0},
+ 		{"Fping6Location",		&CONFIG_FPING6_LOCATION,		TYPE_STRING,
+ 			PARM_OPT,	0,			0},
+ 		{"Timeout",			&CONFIG_TIMEOUT,			TYPE_INT,
+@@ -722,6 +759,10 @@
+ 			PARM_OPT,	0,			0},
+ 		{"ExportFileSize",		&CONFIG_EXPORT_FILE_SIZE,		TYPE_UINT64,
+ 			PARM_OPT,	ZBX_MEBIBYTE,	ZBX_GIBIBYTE},
++		{"HistoryStorageType",		&CONFIG_HISTORY_STORAGE_TYPE,		TYPE_STRING,
++			PARM_OPT,	1,			0},
++		{"HistoryStorageTableName",		&CONFIG_HISTORY_STORAGE_TABLE_NAME,		TYPE_STRING,
++			PARM_OPT,	1,			0},
+ 		{NULL}
+ 	};
+ 
+@@ -945,7 +986,7 @@
+ 	zabbix_log(LOG_LEVEL_INFORMATION, "VMware monitoring:         " VMWARE_FEATURE_STATUS);
+ 	zabbix_log(LOG_LEVEL_INFORMATION, "SMTP authentication:       " SMTP_AUTH_FEATURE_STATUS);
+ 	zabbix_log(LOG_LEVEL_INFORMATION, "Jabber notifications:      " JABBER_FEATURE_STATUS);
+-	zabbix_log(LOG_LEVEL_INFORMATION, "Ez Texting notifications:  " LIBCURL_FEATURE_STATUS);
++	zabbix_log(LOG_LEVEL_INFORMATION, "CURL support:		" LIBCURL_FEATURE_STATUS);
+ 	zabbix_log(LOG_LEVEL_INFORMATION, "ODBC:                      " ODBC_FEATURE_STATUS);
+ 	zabbix_log(LOG_LEVEL_INFORMATION, "SSH2 support:              " SSH2_FEATURE_STATUS);
+ 	zabbix_log(LOG_LEVEL_INFORMATION, "IPv6 support:              " IPV6_FEATURE_STATUS);
+@@ -1061,7 +1102,8 @@
+ 	zbx_vc_enable();
+ 
+ 	threads_num = CONFIG_CONFSYNCER_FORKS + CONFIG_POLLER_FORKS
+-			+ CONFIG_UNREACHABLE_POLLER_FORKS + CONFIG_TRAPPER_FORKS + CONFIG_PINGER_FORKS
++			+ CONFIG_UNREACHABLE_POLLER_FORKS + CONFIG_ASYNC_SNMP_POLLER_FORKS 
++			+ CONFIG_ASYNC_AGENT_POLLER_FORKS + CONFIG_TRAPPER_FORKS + CONFIG_PINGER_FORKS
+ 			+ CONFIG_ALERTER_FORKS + CONFIG_HOUSEKEEPER_FORKS + CONFIG_TIMER_FORKS
+ 			+ CONFIG_HTTPPOLLER_FORKS + CONFIG_DISCOVERER_FORKS + CONFIG_HISTSYNCER_FORKS
+ 			+ CONFIG_ESCALATOR_FORKS + CONFIG_IPMIPOLLER_FORKS + CONFIG_JAVAPOLLER_FORKS
+@@ -1113,6 +1155,16 @@
+ 				thread_args.args = &poller_type;
+ 				threads[i] = zbx_thread_start(poller_thread, &thread_args);
+ 				break;
++			case ZBX_PROCESS_TYPE_ASYNC_SNMP:
++				poller_type = ZBX_POLLER_TYPE_ASYNC_SNMP;
++				thread_args.args = &poller_type;
++				threads[i] = zbx_thread_start(poller_thread, &thread_args);
++				break;
++			case ZBX_PROCESS_TYPE_ASYNC_AGENT:
++				poller_type = ZBX_POLLER_TYPE_ASYNC_AGENT;
++				thread_args.args = &poller_type;
++				threads[i] = zbx_thread_start(poller_thread, &thread_args);
++				break;
+ 			case ZBX_PROCESS_TYPE_TRAPPER:
+ 				thread_args.args = &listen_sock;
+ 				threads[i] = zbx_thread_start(trapper_thread, &thread_args);
+diff -rNu -x '*.log' -x '*.status' -x Makefile -x '*.o' -x '*.a' -x '*.json' -x '*.Po' -x '*.in.' -x '*.example' -x config.h -x '*.orig' -x '*.rej' zabbix-4.0.1rc2/src/zabbix_server/trapper/trapper.c zabbix-4.0.1.fixed/src/zabbix_server/trapper/trapper.c
+--- zabbix-4.0.1rc2/src/zabbix_server/trapper/trapper.c	2018-10-25 13:29:12.000000000 +0500
++++ zabbix-4.0.1.fixed/src/zabbix_server/trapper/trapper.c	2018-11-16 12:51:04.860205043 +0500
+@@ -822,7 +822,85 @@
+ 
+ 	zbx_status_counters_free();
+ }
++/******************************************************************************
++ *                                                                            *
++ * Function: recv_getproblems                                                 *
++ *                                                                            *
++ * Purpose: process problems request                                           *
++ *                                                                            *
++ * Parameters:  sock  - [IN] the request socket                               *
++ *              jp    - [IN] the request data                                 *
++ *                                                                            *
++ * Return value:  SUCCEED - processed successfully                            *
++ *                FAIL - an error occurred                                    *
++ *                                                                            *
++ ******************************************************************************/
++static int	recv_getproblems(zbx_socket_t *sock, struct zbx_json_parse *jp)
++{
++
++#define ZBX_GET_STATUS_UNKNOWN	-1
++#define ZBX_GET_STATUS_PING	0
++#define ZBX_GET_STATUS_FULL	1
+ 
++	const char		*__function_name = "recv_getstatus";
++	zbx_user_t		user;
++	int			ret = FAIL, request_type = ZBX_GET_STATUS_UNKNOWN;
++	char			type[MAX_STRING_LEN], sessionid[MAX_STRING_LEN];
++	struct zbx_json		json;
++
++	zabbix_log(LOG_LEVEL_DEBUG, "In %s()", __function_name);
++
++	if (SUCCEED != zbx_json_value_by_name(jp, ZBX_PROTO_TAG_SID, sessionid, sizeof(sessionid)) ||
++			SUCCEED != DBget_user_by_active_session(sessionid, &user))
++	{
++		zbx_send_response(sock, ret, "Permission denied.", CONFIG_TIMEOUT);
++		goto out;
++	}
++
++	if (SUCCEED == zbx_json_value_by_name(jp, ZBX_PROTO_TAG_TYPE, type, sizeof(type)))
++	{
++		if (0 == strcmp(type, ZBX_PROTO_VALUE_GET_STATUS_PING))
++		{
++			request_type = ZBX_GET_STATUS_PING;
++		}
++		else if (0 == strcmp(type, ZBX_PROTO_VALUE_GET_STATUS_FULL))
++		{
++			request_type = ZBX_GET_STATUS_FULL;
++		}
++	}
++
++	if (ZBX_GET_STATUS_UNKNOWN == request_type)
++	{
++		zbx_send_response(sock, ret, "Unsupported request type.", CONFIG_TIMEOUT);
++		goto out;
++	}
++
++		
++//	zbx_json_init(&json, ZBX_JSON_STAT_BUF_LEN);
++	zbx_json_init(&json, ZBX_JSON_PROBLEMS_BUF_LEN);
++	zbx_json_addstring(&json, ZBX_PROTO_TAG_RESPONSE, ZBX_PROTO_VALUE_SUCCESS, ZBX_JSON_TYPE_STRING);
++	zbx_json_addobject(&json, ZBX_PROTO_TAG_DATA);
++	//zbx_json_addstring(&json, "hello","world", ZBX_JSON_TYPE_STRING);	
++	zbx_dump_problems_to_json(&json);
++
++	//zbx_json_close(&json);
++	//zabbix_log(LOG_LEVEL_DEBUG, "%s() json.buffer:'%s'", __function_name, json.buffer);
++
++	(void)zbx_tcp_send(sock, json.buffer);
++
++	zbx_json_free(&json);
++
++out:
++	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%s", __function_name);
++
++	return 1;
++
++#undef ZBX_GET_STATUS_UNKNOWN
++#undef ZBX_GET_STATUS_PING
++#undef ZBX_GET_STATUS_FULL
++
++
++}
+ /******************************************************************************
+  *                                                                            *
+  * Function: recv_getstatus                                                   *
+@@ -1040,6 +1118,9 @@
+ 			{
+ 				if (0 != (program_type & ZBX_PROGRAM_TYPE_SERVER))
+ 					ret = recv_getstatus(sock, &jp);
++			} else if (0 == strcmp(value, ZBX_PROTO_VALUE_GET_PROBLEMS))
++			{
++					ret = recv_getproblems(sock, &jp);
+ 			}
+ 			else
+ 				zabbix_log(LOG_LEVEL_WARNING, "unknown request received [%s]", value);

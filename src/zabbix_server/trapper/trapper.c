@@ -822,7 +822,85 @@ static void	status_stats_export(struct zbx_json *json, zbx_user_type_t access_le
 
 	zbx_status_counters_free();
 }
+/******************************************************************************
+ *                                                                            *
+ * Function: recv_getproblems                                                 *
+ *                                                                            *
+ * Purpose: process problems request                                           *
+ *                                                                            *
+ * Parameters:  sock  - [IN] the request socket                               *
+ *              jp    - [IN] the request data                                 *
+ *                                                                            *
+ * Return value:  SUCCEED - processed successfully                            *
+ *                FAIL - an error occurred                                    *
+ *                                                                            *
+ ******************************************************************************/
+static int	recv_getproblems(zbx_socket_t *sock, struct zbx_json_parse *jp)
+{
 
+#define ZBX_GET_STATUS_UNKNOWN	-1
+#define ZBX_GET_STATUS_PING	0
+#define ZBX_GET_STATUS_FULL	1
+
+	const char		*__function_name = "recv_getstatus";
+	zbx_user_t		user;
+	int			ret = FAIL, request_type = ZBX_GET_STATUS_UNKNOWN;
+	char			type[MAX_STRING_LEN], sessionid[MAX_STRING_LEN];
+	struct zbx_json		json;
+
+	zabbix_log(LOG_LEVEL_DEBUG, "In %s()", __function_name);
+
+	if (SUCCEED != zbx_json_value_by_name(jp, ZBX_PROTO_TAG_SID, sessionid, sizeof(sessionid)) ||
+			SUCCEED != DBget_user_by_active_session(sessionid, &user))
+	{
+		zbx_send_response(sock, ret, "Permission denied.", CONFIG_TIMEOUT);
+		goto out;
+	}
+
+	if (SUCCEED == zbx_json_value_by_name(jp, ZBX_PROTO_TAG_TYPE, type, sizeof(type)))
+	{
+		if (0 == strcmp(type, ZBX_PROTO_VALUE_GET_STATUS_PING))
+		{
+			request_type = ZBX_GET_STATUS_PING;
+		}
+		else if (0 == strcmp(type, ZBX_PROTO_VALUE_GET_STATUS_FULL))
+		{
+			request_type = ZBX_GET_STATUS_FULL;
+		}
+	}
+
+	if (ZBX_GET_STATUS_UNKNOWN == request_type)
+	{
+		zbx_send_response(sock, ret, "Unsupported request type.", CONFIG_TIMEOUT);
+		goto out;
+	}
+
+		
+//	zbx_json_init(&json, ZBX_JSON_STAT_BUF_LEN);
+	zbx_json_init(&json, ZBX_JSON_PROBLEMS_BUF_LEN);
+	zbx_json_addstring(&json, ZBX_PROTO_TAG_RESPONSE, ZBX_PROTO_VALUE_SUCCESS, ZBX_JSON_TYPE_STRING);
+	zbx_json_addobject(&json, ZBX_PROTO_TAG_DATA);
+	//zbx_json_addstring(&json, "hello","world", ZBX_JSON_TYPE_STRING);	
+	zbx_dump_problems_to_json(&json);
+
+	//zbx_json_close(&json);
+	//zabbix_log(LOG_LEVEL_DEBUG, "%s() json.buffer:'%s'", __function_name, json.buffer);
+
+	(void)zbx_tcp_send(sock, json.buffer);
+
+	zbx_json_free(&json);
+
+out:
+	zabbix_log(LOG_LEVEL_DEBUG, "End of %s():%s", __function_name);
+
+	return 1;
+
+#undef ZBX_GET_STATUS_UNKNOWN
+#undef ZBX_GET_STATUS_PING
+#undef ZBX_GET_STATUS_FULL
+
+
+}
 /******************************************************************************
  *                                                                            *
  * Function: recv_getstatus                                                   *
@@ -1040,6 +1118,9 @@ static int	process_trap(zbx_socket_t *sock, char *s, zbx_timespec_t *ts)
 			{
 				if (0 != (program_type & ZBX_PROGRAM_TYPE_SERVER))
 					ret = recv_getstatus(sock, &jp);
+			} else if (0 == strcmp(value, ZBX_PROTO_VALUE_GET_PROBLEMS))
+			{
+					ret = recv_getproblems(sock, &jp);
 			}
 			else
 				zabbix_log(LOG_LEVEL_WARNING, "unknown request received [%s]", value);

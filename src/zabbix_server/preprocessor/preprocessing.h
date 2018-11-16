@@ -25,6 +25,7 @@
 #include "dbcache.h"
 
 #define ZBX_IPC_SERVICE_PREPROCESSING	"preprocessing"
+#define ZBX_IPC_SERVICE_PREPROCESSING_WORKER	"preprocessing_worker"
 
 #define ZBX_IPC_PREPROCESSOR_WORKER	1
 #define ZBX_IPC_PREPROCESSOR_REQUEST	2

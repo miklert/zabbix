@@ -777,7 +777,6 @@ static int	get_values(unsigned char poller_type, int *nextcheck,int *processed_n
 			}
 			else 
 			{	
-				zabbix_log(LOG_LEVEL_DEBUG, "Starting single get_value agent poller call");
 				errcodes[i] = get_value(&items[i], &results[i], &add_results);
 			}
 		}	
@@ -804,7 +803,7 @@ static int	get_values(unsigned char poller_type, int *nextcheck,int *processed_n
 			case GATEWAY_ERROR:
 			case TIMEOUT_ERROR:
 				/* for mass problems don't mark host as unreach for async and unreach pollers, because:
-				first, that sometimes causes a "poll" bug in mysql lib (100% core load on waiting for smth from mysql, probably solvable by alarm)
+				first, that sometimes causes a "poll" bug in mysql lib (100% thread load on waiting in a poll for mysql, probably solvable by alarm)
 				second, there seems to be no reason for that, async pollers live just fine having even all hosts unreachable */
 				if ( HOST_AVAILABLE_FALSE != last_available && 
 						(ZBX_POLLER_TYPE_NORMAL == poller_type || 
@@ -815,7 +814,7 @@ static int	get_values(unsigned char poller_type, int *nextcheck,int *processed_n
 				}
 				break;
 			case NOT_PROCESSED:
-				//this might happen on asyn processing for snmp
+				//this might happen on async processing for snmp
 				//when a host fails answering an item, next ones are not requested
 			case CONFIG_ERROR:
 				/* nothing to do */
@@ -945,20 +944,17 @@ exit:
 	return num_collected;
 }
 
-#define	STAT_INTERVAL	20	
-#define SLEEP_USEC	20000
+
 
 ZBX_THREAD_ENTRY(poller_thread, args)
 {
-	int		nextcheck;
-	// sleeptime = -1, 
-	//processed_total = 0, old_processed = 0;
-	double		start_sec, work_sec =0.0, sleep_sec=0.0;
-	// total_sec = 0.0, old_total_sec = 0.0;
+	int		nextcheck, sleeptime = -1, processed = 0, old_processed = 0;
+	double		sec, total_sec = 0.0, old_total_sec = 0.0;
 	time_t		last_stat_time;
 	unsigned char	poller_type;
-	
-	unsigned int collected_per_interval=0, collected_per_run=0, processed_per_interval=0, processed_per_run=0, runs=0;
+
+#define	STAT_INTERVAL	5	/* if a process is busy and does not sleep then update status not faster than */
+				/* once in STAT_INTERVAL seconds */
 
 	poller_type = *(unsigned char *)((zbx_thread_args_t *)args)->args;
 	process_type = ((zbx_thread_args_t *)args)->process_type;
@@ -969,7 +965,7 @@ ZBX_THREAD_ENTRY(poller_thread, args)
 	zabbix_log(LOG_LEVEL_INFORMATION, "%s #%d started [%s #%d]", get_program_type_string(program_type),
 			server_num, get_process_type_string(process_type), process_num);
 #ifdef HAVE_NETSNMP
-	if (ZBX_POLLER_TYPE_NORMAL == poller_type || ZBX_POLLER_TYPE_UNREACHABLE == poller_type || ZBX_POLLER_TYPE_ASYNC_SNMP == poller_type)
+	if (ZBX_POLLER_TYPE_NORMAL == poller_type || ZBX_POLLER_TYPE_UNREACHABLE == poller_type)
 		zbx_init_snmp();
 #endif
 
@@ -993,7 +989,7 @@ ZBX_THREAD_ENTRY(poller_thread, args)
 					old_total_sec);
 		}
 
-		processed += get_values(poller_type, &nextcheck);
+		processed += get_values(poller_type, &nextcheck,&processed);
 		total_sec += zbx_time() - sec;
 
 		sleeptime = calculate_sleeptime(nextcheck, POLLER_DELAY);
@@ -1023,3 +1019,4 @@ ZBX_THREAD_ENTRY(poller_thread, args)
 
 #undef STAT_INTERVAL
 }
+

@@ -34,15 +34,10 @@ class CHistoryManager {
 	 * @return array    an array with items IDs as keys and arrays of history objects as values
 	 */
 	public function getLastValues(array $items, $limit = 1, $period = null) {
-
 		$results = [];
 		$grouped_items = self::getItemsGroupedByStorage($items);
 
-		if (array_key_exists(ZBX_HISTORY_SOURCE_CLICKHOUSE, $grouped_items)) {
-			$results += $this->getLastValuesFromClickHouse($grouped_items[ZBX_HISTORY_SOURCE_CLICKHOUSE], $limit,
-					$period
-			);
-		} else if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
+		if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
 			$results += $this->getLastValuesFromElasticsearch($grouped_items[ZBX_HISTORY_SOURCE_ELASTIC], $limit,
 					$period
 			);
@@ -60,157 +55,6 @@ class CHistoryManager {
 	 *
 	 * @see CHistoryManager::getLastValues
 	 */
-
-	/**
-	 * Clickhouse implementation of getLastValues.
-	 *
-	 */
-
-
-private function getLastValuesFromClickhouse($items, $limit, $period) {
-
-	global $HISTORY;
-	$results = [];
-	$itemslist='';
-
-	
-	foreach ($items as $item) {
-	    if (strlen($itemslist)>0) {
-	        $itemslist.=','.$item['itemid'];
-    	    } else {
-	        $itemslist.=$item['itemid'];
-		}
-	} 
-
-
-	$query_text='SELECT itemid, anyLast(toInt32(clock)) as clk,anyLast(ns),anyLast(value),anyLast(value_dbl),anyLast(value_str)'.
-	' FROM '.$HISTORY['tablename'].' h'.
-	' WHERE h.itemid in ( '.$itemslist.')'.
-	($period ? ' AND h.clock>'.(time() - $period) : '').
-	' GROUP BY itemid';
-
-        $values = CClickHouseHelper::query($query_text,1,array('itemid','clock','ns','value','value_dbl','value_str'));
-
-	foreach ($values as $res) 
-	{
-		$itemid=$res['itemid'];
-
-		//i know this is shit code, but it works much better then 
-		//checking for item type for some reason (see it celow)
-		$res['value']=floatval($res['value_dbl'])+intval($res['value']);		
-		if (strlen($res['value_str']>0)) $res['value']=$res['value_str'];
-
-		if (empty($results[$itemid])) 
-		    {
-			$results[$itemid]=[$res];
-		    }
-	}
-
-//	foreach ($items as $item) {
-//	    if ( !empty($results[$item['itemid']])) {
-//	    	if ($item['value_type'] ==  ITEM_VALUE_TYPE_FLOAT && !empty($results[$item['itemid']]['value_dbl'])) {
-//		    $results[$item['itemid']]['value']=$results[$item['itemid']]['value_dbl'];
-//	        }
-//		if ($item['value_type'] ==  ITEM_VALUE_TYPE_STR) {
-//		    $results[$item['itemid']]['value']=$results[$item['itemid']]['value_str'];
-//		}
-//	    }
-//	    
-//	}
-
-	return $results;
-
-//	foreach ($items as $item) {
-//	    if ($item['value_type'] ==  ITEM_VALUE_TYPE_FLOAT) {
-//    		if (strlen($float_itemslist)>0) {
-//		        $float_itemslist.=','.$item['itemid'];
-//    		} else {
-//		    $float_itemslist.=$item['itemid'];
-//		}
-//	    } else if ($item['value_type'] ==  ITEM_VALUE_TYPE_UINT64) {
-//		if (strlen($uint_itemslist)>0) {
-//		        $uint_itemslist.=','.$item['itemid'];
-//    		} else {
-//		    $uint_itemslist.=$item['itemid'];
-//		}
-//	    } else {
-//		if (strlen($str_itemslist)>0) {
-//		        $str_itemslist.=','.$item['itemid'];
-//    		} else {
-//		    $str_itemslist.=$item['itemid'];
-//		}
-//	    }
-//	}
-
-//	var_dump($itemslist);
-	
-//	$query_text='SELECT itemid, toInt32(clock) as clk,ns,value,value_dbl,value_str as value'.
-//	' FROM '.$HISTORY['tablename'].' h'.
-//	' WHERE h.itemid in ( '.$itemslist.')'.
-//	($period ? ' AND h.clock>'.(time() - $period) : '').
-//	' ORDER BY clk DESC';
-
-
-//	$query_text.=' UNION ALL SELECT itemid, toInt32(clock) as clk,ns,value as value'.
-//	' FROM '.$HISTORY['tablename'].' h'.
-//	' WHERE h.itemid in ( '.$uint_itemslist.')'.
-//	($period ? ' AND h.clock>'.(time() - $period) : '').
-//	' ORDER BY clk DESC';
-//
-//	$query_text.=' UNION ALL SELECT itemid, toInt32(clock) as clk,ns,value_str as value'.
-//	' FROM '.$HISTORY['tablename'].' h'.
-//	' WHERE h.itemid in ( '.$str_itemslist.')'.
-//	($period ? ' AND h.clock>'.(time() - $period) : '').
-//	' ORDER BY clk DESC';
-
-//	var_dump($query_text);
-    
-//        $values = CClickHouseHelper::query($query_text,1,array('itemid','clock','ns','value','value_dbl','value_str'));
-
-//var_dump($values);
-
-/*
-	foreach ($items as $item) {
-	    if ($item['value_type'] ==  ITEM_VALUE_TYPE_FLOAT) {
-		$query_text=	'SELECT itemid, toInt32(clock),ns,value_dbl'.
-		    ' FROM '.$HISTORY['tablename'].' h'.
-		    ' WHERE h.itemid= '.$item['itemid'].
-		    ($period ? ' AND h.clock>'.(time() - $period) : '').
-		    ' ORDER BY h.clock DESC';
-	    }
-
-	    if ($item['value_type'] ==  ITEM_VALUE_TYPE_UINT64) {
-		$query_text=	'SELECT itemid, toInt32(clock) as clock,ns,value'.
-		    ' FROM '.$HISTORY['tablename'].' h'.
-		    ' WHERE h.itemid= '.$item['itemid']. 
-		    ($period ? ' AND h.clock>'.(time() - $period) : '').
-		    ' ORDER BY h.clock DESC';
-	    }
-
-	    if ($item['value_type'] ==  ITEM_VALUE_TYPE_STR || $item['value_type'] ==  ITEM_VALUE_TYPE_TEXT ) {
-		$query_text=	'SELECT itemid, toInt32(clock) as clock,ns,value_str'.
-		    ' FROM '.$HISTORY['tablename'].' h'.
-		    ' WHERE h.itemid= '.$item['itemid']. 
-		    ($period ? ' AND h.clock>'.(time() - $period) : '').
-		    ' ORDER BY h.clock DESC';
-	    }
-
-	    if ($limit > 0) $query_text.=" LIMIT $limit";
-	    
-	    $values = CClickHouseHelper::query($query_text,1,array('itemid','clock','ns','value'));
-
-//	    var_dump($values);
-	    if ($values) {
-		$results[$item['itemid']] = $values;
-	    } else {
-//			    error("Got empty array, ommiting the result");
-	    }
-	}
-
-	return $results;
-*/
-    }
-
 	private function getLastValuesFromElasticsearch($items, $limit, $period) {
 		$terms = [];
 		$results = [];
@@ -293,7 +137,6 @@ private function getLastValuesFromClickhouse($items, $limit, $period) {
 	 *
 	 * @see CHistoryManager::getLastValues
 	 */
-
 	private function getLastValuesFromSql($items, $limit, $period) {
 		$results = [];
 
@@ -328,7 +171,6 @@ private function getLastValuesFromClickhouse($items, $limit, $period) {
 	 * @return array    history value aggregation for graphs
 	 */
 	public function getGraphAggregation(array $items, $time_from, $time_to, $width = null) {
-//		error("Hello wold");
 		if ($width !== null) {
 			$size = $time_to - $time_from;
 			$delta = $size - $time_from % $size;
@@ -341,13 +183,7 @@ private function getLastValuesFromClickhouse($items, $limit, $period) {
 		$grouped_items = self::getItemsGroupedByStorage($items);
 
 		$results = [];
-
-
-		if (array_key_exists(ZBX_HISTORY_SOURCE_CLICKHOUSE, $grouped_items)) {
-			$results += $this->getGraphAggregationFromClickhouse($grouped_items[ZBX_HISTORY_SOURCE_CLICKHOUSE],
-					$time_from, $time_to, $width, $size, $delta
-			);
-		} else if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
+		if (array_key_exists(ZBX_HISTORY_SOURCE_ELASTIC, $grouped_items)) {
 			$results += $this->getGraphAggregationFromElasticsearch($grouped_items[ZBX_HISTORY_SOURCE_ELASTIC],
 					$time_from, $time_to, $width, $size, $delta
 			);
@@ -367,57 +203,6 @@ private function getLastValuesFromClickhouse($items, $limit, $period) {
 	 *
 	 * @see CHistoryManager::getGraphAggregation
 	 */
-	private function getGraphAggregationFromClickhouse(array $items, $time_from, $time_to, $width, $size, $delta) {
-
-		global $HISTORY;
-		$group_by = 'itemid';
-		$sql_select_extra = '';
-
-		if ($width !== null && $size !== null && $delta !== null) {
-			// Required for 'group by' support of Oracle.
-			$calc_field = 'round('.$width.'*'.'modulo(toUInt32(clock)'.'+'.$delta.",$size)".'/('.$size.'),0)';
-
-			$sql_select_extra = ','.$calc_field.' AS i';
-			$group_by .= ','.$calc_field;
-		}
-
-		$results = [];
-
-		foreach ($items as $item) {
-			if ($item['value_type'] == ITEM_VALUE_TYPE_UINT64) {
-				$sql_select = 'COUNT(*) AS count,AVG(value) AS avg,MIN(value) AS min,MAX(value) AS max';
-			} else
-			{
-				$sql_select = 'COUNT(*) AS count,AVG(value_dbl) AS avg,MIN(value_dbl) AS min,MAX(value_dbl) AS max';
-			}
-
-			$query_text = 
-				'SELECT itemid,'.$sql_select.$sql_select_extra.',MAX(toUInt32(clock)) AS clock1'.
-				' FROM '. $HISTORY['tablename'] .
-				' WHERE itemid='.$item['itemid'].
-					' AND toUInt32(clock)>='.$time_from.
-					' AND toUInt32(clock)<='.$time_to.
-				' GROUP BY '.$group_by ;
-			
-//			file_put_contents('/var/log/nginx/chartlog.log', "Will do query '$query_text' \n",FILE_APPEND);
-
-			$values = CClickHouseHelper::query($query_text,1,array('itemid','count','avg','min','max','i','clock'));
-
-			$results[$item['itemid']]['source'] = 'history';
-			$results[$item['itemid']]['data'] = $values;
-		}
-
-//	    ob_start();
-//	    var_dump($results);
-//	    $dresult = ob_get_clean();
-//	    error("Dump of the result is '$dresult'");
-
-//	    file_put_contents('/var/log/nginx/chartlog.log', "Clickhouse Results structure is $dresult' \n",FILE_APPEND);
-
-		return $results;
-
-	}
-
 	private function getGraphAggregationFromElasticsearch(array $items, $time_from, $time_to, $width, $size, $delta) {
 		$terms = [];
 
@@ -638,8 +423,6 @@ private function getLastValuesFromClickhouse($items, $limit, $period) {
 	 */
 	public function getAggregatedValue(array $item, $aggregation, $time_from) {
 		switch (self::getDataSourceType($item['value_type'])) {
-			case ZBX_HISTORY_SOURCE_CLICKHOUSE:
-				return $this->getAggregatedValueFromClickhouse($item, $aggregation, $time_from);
 			case ZBX_HISTORY_SOURCE_ELASTIC:
 				return $this->getAggregatedValueFromElasticsearch($item, $aggregation, $time_from);
 
@@ -647,24 +430,6 @@ private function getLastValuesFromClickhouse($items, $limit, $period) {
 				return $this->getAggregatedValueFromSql($item, $aggregation, $time_from);
 		}
 	}
-
-	private function getAggregatedValueFromClickhouse(array $item, $aggregation, $time_from) {
-
-		global $HISTORY;
-		$query_text =
-			'SELECT '.$aggregation.'(value) AS value'.
-			' FROM '. $HISTORY['tablename'].
-			' WHERE clock>toDateTime('.$time_from.')'.
-			' AND itemid='.$item['itemid'].
-			' HAVING COUNT(*)>0';
-		
-
-		$value = CClickHouseHelper::query($query_text,0,array());
-
-		return $value;
-
-	}
-
 
 	/**
 	 * Elasticsearch specific implementation of getAggregatedValue.
@@ -858,12 +623,8 @@ private function getLastValuesFromClickhouse($items, $limit, $period) {
 			global $HISTORY;
 
 			if (is_array($HISTORY) && array_key_exists('types', $HISTORY) && is_array($HISTORY['types'])) {
-					if ($HISTORY['storagetype']=='clickhouse') 
-							$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
-								? ZBX_HISTORY_SOURCE_CLICKHOUSE : ZBX_HISTORY_SOURCE_SQL;
-					else 
-							$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
-								? ZBX_HISTORY_SOURCE_ELASTIC : ZBX_HISTORY_SOURCE_SQL;
+				$cache[$value_type] = in_array(self::getTypeNameByTypeId($value_type), $HISTORY['types'])
+						? ZBX_HISTORY_SOURCE_ELASTIC : ZBX_HISTORY_SOURCE_SQL;
 			}
 			else {
 				// SQL is a fallback data source.

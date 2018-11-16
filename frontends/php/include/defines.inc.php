@@ -50,10 +50,8 @@ define('ZBX_DATE_TIME',			'Y-m-d H:i'); // Time selector date and time without s
 
 // the maximum period to display history data for the latest data and item overview pages in seconds
 // by default set to 86400 seconds (24 hours)
-define('ZBX_HISTORY_PERIOD', 7200);
+define('ZBX_HISTORY_PERIOD', 86400);
 
-
-define('ZBX_HISTORY_SOURCE_CLICKHOUSE',	'clickhouse');
 define('ZBX_HISTORY_SOURCE_ELASTIC',	'elastic');
 define('ZBX_HISTORY_SOURCE_SQL',		'sql');
 
@@ -61,7 +59,7 @@ define('ELASTICSEARCH_RESPONSE_PLAIN',			0);
 define('ELASTICSEARCH_RESPONSE_AGGREGATION',	1);
 define('ELASTICSEARCH_RESPONSE_DOCUMENTS',		2);
 
-define('ZBX_WIDGET_ROWS', 2000);
+define('ZBX_WIDGET_ROWS', 20);
 
 define('ZBX_FONTPATH',				realpath('fonts')); // where to search for font (GD > 2.0.18)
 define('ZBX_GRAPH_FONT_NAME',		'DejaVuSans'); // font file name

@@ -772,7 +772,7 @@ class CMacrosResolverGeneral {
 		}
 
 		$result = DBselect(
-			'SELECT f.triggerid,f.functionid,h.hostid,h.host,h.name,h.description'.
+			'SELECT f.triggerid,f.functionid,h.hostid,h.host,h.name'.
 			' FROM functions f'.
 				' JOIN items i ON f.itemid=i.itemid'.
 				' JOIN hosts h ON i.hostid=h.hostid'.
@@ -781,7 +781,6 @@ class CMacrosResolverGeneral {
 
 		while ($row = DBfetch($result)) {
 			foreach ($macros[$row['functionid']] as $macro => $tokens) {
-				//var_dump($row);
 				switch ($macro) {
 					case 'HOST.ID':
 						$value = $row['hostid'];
@@ -795,10 +794,6 @@ class CMacrosResolverGeneral {
 					case 'HOST.NAME':
 						$value = $row['name'];
 						break;
-					case 'HOST.DESCRIPTION1':
-						$value = $row['description'];
-						break;
-
 				}
 
 				foreach ($tokens as $token) {

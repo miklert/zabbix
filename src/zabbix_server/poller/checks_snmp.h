@@ -32,6 +32,7 @@ extern int	CONFIG_TIMEOUT;
 void	zbx_init_snmp(void);
 int	get_value_snmp(const DC_ITEM *item, AGENT_RESULT *result);
 void	get_values_snmp(const DC_ITEM *items, AGENT_RESULT *results, int *errcodes, int num);
+void	get_values_snmp_async(const DC_ITEM *items, AGENT_RESULT *results, int *errcodes, int num);
 #endif
 
 #endif
